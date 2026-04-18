@@ -1,0 +1,16 @@
+matplotlib
+numba
+numpy
+pandas
+pydantic<3,>=2
+PyYAML
+rich
+scipy
+seaborn
+torch
+tqdm
+
+[dev]
+jupyter
+pytest
+pytest-cov

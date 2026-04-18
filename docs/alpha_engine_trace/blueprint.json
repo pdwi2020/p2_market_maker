@@ -1,0 +1,40 @@
+{
+  "paper": "Avellaneda and Stoikov (2008)",
+  "repo": "p2_market_maker",
+  "run_name": "default_synthetic",
+  "equation_map": {
+    "eq7_reservation_price": {
+      "expression": "r(q,t) = S - q * gamma * sigma^2 * (T - t)",
+      "implementation": [
+        "src/p2/hjb_solver.py::reservation_price",
+        "src/p2/execution.py::AvellanedaStoikovStrategy.quotes"
+      ]
+    },
+    "eq8_total_spread": {
+      "expression": "Delta*(t) = gamma * sigma^2 * (T - t) + (2 / gamma) * log(1 + gamma / kappa)",
+      "implementation": [
+        "src/p2/hjb_solver.py::optimal_total_spread",
+        "src/p2/hjb_solver.py::optimal_spread"
+      ]
+    },
+    "eq9_quote_placement": {
+      "expression": "b_t = r_t - Delta*(t)/2, a_t = r_t + Delta*(t)/2",
+      "implementation": [
+        "src/p2/hjb_solver.py::optimal_bid",
+        "src/p2/hjb_solver.py::optimal_ask",
+        "src/p2/execution.py::AvellanedaStoikovStrategy.quotes"
+      ]
+    }
+  },
+  "extensions": [
+    "inventory hard limits via quote suppression",
+    "adverse selection via immediate post-fill mid jump",
+    "top-of-book replay approximation"
+  ],
+  "artifacts": {
+    "summary": "results/default_synthetic/summary.json",
+    "baseline_comparison": "results/default_synthetic/baseline_comparison.csv",
+    "sweep": "results/default_synthetic/cuda_sweep.csv",
+    "heatmap": "results/default_synthetic/avs_sweep_heatmap.png"
+  }
+}

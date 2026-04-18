@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p2-market-maker"
+version = "0.2.0"
+description = "Avellaneda-Stoikov market maker research repo"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "matplotlib",
+  "numba",
+  "numpy",
+  "pandas",
+  "pydantic>=2,<3",
+  "PyYAML",
+  "rich",
+  "scipy",
+  "seaborn",
+  "torch",
+  "tqdm",
+]
+
+[project.optional-dependencies]
+dev = [
+  "jupyter",
+  "pytest",
+  "pytest-cov",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
