@@ -14,6 +14,9 @@ simulate:
 sweep:
 	"$(PYTHON)" -m p2.cuda_sweep --config "$(CONFIG)"
 
+sweep-cross-symbol:
+	"$(PYTHON)" scripts/run_cross_symbol_sweep.py
+
 calibrate:
 	"$(PYTHON)" -m p2.calibration --config "$(CONFIG)"
 

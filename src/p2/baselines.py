@@ -120,3 +120,82 @@ def compare_strategies(simulators: dict[str, Any], n_paths: int) -> pd.DataFrame
         )
 
     return pd.DataFrame(rows).sort_values("sharpe", ascending=False).reset_index(drop=True)
+
+
+@dataclass(slots=True)
+class InventoryLinearMM:
+    half_spread: float
+    lambda_q: float = 1.0
+    Q_max: int = 10
+    name: str = "inventory_linear"
+
+    def quotes(
+        self,
+        S: float | np.ndarray,
+        q: float | np.ndarray,
+        t: float,
+    ) -> tuple[float | np.ndarray, float | np.ndarray]:
+        del t
+        s_arr = np.asarray(S, dtype=float)
+        q_arr = np.asarray(q, dtype=float)
+        skew = self.lambda_q * q_arr / max(self.Q_max, 1)
+        bid = s_arr - self.half_spread * (1.0 + skew)
+        ask = s_arr + self.half_spread * (1.0 - skew)
+        if bid.ndim == 0:
+            return float(bid.item()), float(ask.item())
+        return bid, ask
+
+
+@dataclass(slots=True)
+class RandomQuoter:
+    half_spread_max: float
+    rng_seed: int = 0
+    name: str = "random"
+    _rng: np.random.Generator = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._rng = np.random.default_rng(self.rng_seed)
+
+    def quotes(
+        self,
+        S: float | np.ndarray,
+        q: float | np.ndarray,
+        t: float,
+    ) -> tuple[float | np.ndarray, float | np.ndarray]:
+        del q, t
+        s_arr = np.asarray(S, dtype=float)
+        bid_delta = self._rng.uniform(0.0, 2.0 * self.half_spread_max, size=s_arr.shape)
+        ask_delta = self._rng.uniform(0.0, 2.0 * self.half_spread_max, size=s_arr.shape)
+        bid = s_arr - bid_delta
+        ask = s_arr + ask_delta
+        if bid.ndim == 0:
+            return float(bid.item()), float(ask.item())
+        return bid, ask
+
+
+@dataclass(slots=True)
+class AvSOptimalMM:
+    sigma: float
+    gamma: float
+    kappa: float
+    T: float
+    name: str = "avs_optimal"
+
+    def quotes(
+        self,
+        S: float | np.ndarray,
+        q: float | np.ndarray,
+        t: float,
+    ) -> tuple[float | np.ndarray, float | np.ndarray]:
+        from p2.hjb_solver import reservation_price
+
+        half_spread = optimal_spread(t=t, T=self.T, gamma=self.gamma, sigma=self.sigma, kappa=self.kappa)
+        reservation = np.asarray(
+            reservation_price(S=S, q=q, t=t, T=self.T, gamma=self.gamma, sigma=self.sigma),
+            dtype=float,
+        )
+        bid = reservation - half_spread
+        ask = reservation + half_spread
+        if bid.ndim == 0:
+            return float(bid.item()), float(ask.item())
+        return bid, ask
