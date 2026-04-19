@@ -3,6 +3,8 @@
 ## Overview
 P2 implements the Avellaneda-Stoikov (2008) market-making model as a reproducible research repo rather than a toy simulator. The repo now has:
 
+- HJB derivation appendix at `docs/hjb_derivation.md` (3045 words: Ho-Stoll → AvS → queue-reactive correction → Glosten-Milgrom coupling)
+- Research memo at `memo.md` (2501 words; cross-symbol AAPL ablation; GM sensitivity discussion)
 - a typed shared configuration layer in `configs/p2_config.yaml`
 - a single synthetic execution engine used by AVS and both baseline strategies
 - inventory hard limits enforced by quote suppression, not post-fill clipping
@@ -11,6 +13,15 @@ P2 implements the Avellaneda-Stoikov (2008) market-making model as a reproducibl
 - a simplified top-of-book LOBSTER replay and calibration path that works when sample CSVs are available
 
 The canonical environment is `/Volumes/Crucial X9/alpha_engine/.venv`. No repo-local `.venv` is used.
+
+## Reproducibility
+
+- Python: `3.14.3` (shared env at `/Volumes/Crucial X9/alpha_engine/.venv`)
+- Seed: deterministic via `configs/p2_config.yaml` (`seed: 42`)
+- Data: bundled LOBSTER AAPL 2012-06-21 sample (`data/lobster/`); cross-symbol skip log explains AMZN/GOOG/INTC/MSFT/SPY absence
+- Hardware: CPU-only sim runs in <2 min on M2; CUDA sweep optional via `make sweep` on a CUDA host
+- Entry points: `make simulate` (single config), `make backtest` (LOBSTER replay), `make sweep-cross-symbol` (multi-symbol)
+- Tests: `make test` — currently 46 passing
 
 ## Model
 The mid price follows arithmetic Brownian motion
