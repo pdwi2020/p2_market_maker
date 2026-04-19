@@ -1,29 +1,22 @@
 # P2 Research Memo — Avellaneda-Stoikov Market Maker
 
-## Objective
-The goal of P2 is to turn the Avellaneda-Stoikov market-making model into a defensible research project rather than a formula demo. The repo now covers the analytical HJB solution, a reproducible synthetic simulator, baseline comparisons, a parameter sweep, and a replay/calibration path for free LOBSTER samples when those files are available locally.
+## Interview-Ready Conclusion
+I implemented Avellaneda-Stoikov optimal quoting with a Glosten-Milgrom adverse-selection layer, validated it against one free-sample day of LOBSTER top-10 book data, and ablated it against four baseline quoters inside one shared execution engine. On the checked-in AAPL 2012-06-21 replay, the disciplined quote rules all reproduce essentially the same validated baseline: about `$662` terminal PnL on `972` fills with about `7.9%` replay spread capture. The main contribution is not a claim of deployable profitability. The contribution is a defensible research artifact: the HJB derivation, Ho-Stoll foundation, queue-reactive extension, and Glosten-Milgrom coupling are written up in `docs/hjb_derivation.md`; the synthetic and replay paths use one accounting convention; and the memo states plainly where realism still breaks, especially the one-day LOBSTER sample, uncalibrated `mu`, and missing joint queue-plus-information control.
 
-The deliverable is aimed at prop and market-making interview contexts: it should show that the model is implemented correctly, that inventory and fill mechanics are handled consistently, and that the limitations of the replay abstraction are understood rather than hidden.
+## Introduction / Problem Statement
+Avellaneda-Stoikov solves the canonical market-making control problem: a dealer wants to earn the bid-ask spread, but every passive fill changes inventory, and inventory is risky over the remaining trading horizon. That is a natural quantitative-research interview topic because it sits at the intersection of stochastic control, microstructure, simulation, and model skepticism. A candidate can derive the core HJB, implement the quoting rule, compare it against weaker baselines, and then explain what breaks when the stylized assumptions meet market data.
 
-## Model and Implementation
-The analytical core is unchanged from Avellaneda-Stoikov:
+That is the lens for P2. The project is not trying to beat the market in one backtest. It is trying to answer the more defensible question: can I implement the Avellaneda-Stoikov quoting rule correctly, calibrate its primitives from a real top-of-book dataset, and explain how inventory risk, queue position, and adverse selection should interact in a realistic market-maker stack? Week 1 added a Glosten-Milgrom information layer, Week 2 added a cross-symbol ablation pipeline and replay smoke, and Week 3 packages the mathematics and the research readout into one coherent memo.
 
-- Mid price follows arithmetic Brownian motion.
-- Order arrivals decay exponentially with quote distance.
-- Reservation price is `S - q * gamma * sigma^2 * (T - t)`.
-- Total spread is `gamma * sigma^2 * (T - t) + (2 / gamma) * log(1 + gamma / kappa)`.
+This memo therefore does three things. First, it states the control problem and points to the full derivation without duplicating it. Second, it summarizes what the synthetic engine and the LOBSTER replay actually show. Third, it records the limitations honestly: one checked-in day of AAPL is enough to validate implementation plumbing, not enough to claim robust alpha.
 
-The implementation details that matter operationally are:
+## Model
+The full mathematics now live in `docs/hjb_derivation.md`. In words, the repo combines three layers. The first layer is the closed-form Avellaneda-Stoikov solution: Brownian mid-price, exponentially decaying fill intensities, reservation price `S - q * gamma * sigma^2 * (T - t)`, and optimal spread `gamma * sigma^2 * (T - t) + (2 / gamma) * log(1 + gamma / kappa)`. The second layer is a queue-reactive correction in the Huang-Lehalle-Rosenbaum style, implemented in `src/p2/queue.py`, where execution quality depends on queue depth and FIFO position rather than on quote distance alone. The third layer is a Glosten-Milgrom adverse-selection filter in `src/p2/glosten_milgrom.py`, where a fraction `mu` of traders are informed, order flow updates a posterior over latent value, and that posterior tilts effective buy and sell intensities. The memo uses the closed form as the base policy, the queue layer as a realistic correction, and the GM layer as the Week 1 information-sensitive extension.
 
-1. The repo uses one shared execution engine for AVS and the baseline strategies, so the comparison is not contaminated by different fill logic.
-2. Inventory hard limits are enforced by suppressing the relevant quote side once the limit is reached. This avoids pretending that post-fill clipping is a realistic control rule.
-3. Adverse selection is modeled as an immediate mid-price jump of `+epsilon` after ask fills and `-epsilon` after bid fills.
-4. All outputs are driven from `configs/p2_config.yaml` and written into `results/<run_name>/`.
+Operationally, the most important implementation choice is that AVS and all baselines share one execution engine. That matters more than it sounds. It means differences in PnL or fill counts come from the quote logic rather than from inconsistent accounting, different adverse-selection handling, or different inventory clamps.
 
-The replay engine is intentionally narrower than the synthetic engine. It is top-of-book only, does not model queue priority or latency, and should be treated as a qualitative stress test rather than a production backtest.
-
-## Synthetic Results
-The default synthetic run was generated with:
+## Synthetic Simulator Check
+The default synthetic run remains the cleanest implementation sanity check because every parameter is controlled:
 
 - `sigma = 1.0`
 - `gamma = 0.1`
@@ -44,67 +37,95 @@ Results from `results/default_synthetic/summary.json`:
 | Symmetric | 60.1049 | 7.7000 | 7.8058 | 4.4297 | 61.7990 |
 | Constant spread | 63.4168 | 8.5089 | 7.4530 | 4.2453 | 64.7849 |
 
-The key result is not simply that AVS earns the most mean PnL. It also controls inventory materially better than the symmetric and constant-spread baselines while preserving higher realized spread capture per unit of risk. The average absolute inventory is roughly half that of the two simpler baselines, which is exactly the mechanism the reservation-price shift is supposed to provide.
+This is still the right first check on the implementation. AVS earns slightly higher mean PnL than the simpler baselines, but the stronger point is that it cuts average absolute inventory roughly in half. That is the mechanism the theory is supposed to deliver. The reservation-price term does not exist to maximize raw spread capture mechanically; it exists to move the quote center away from the mid when inventory becomes risky.
 
-This is synthetic evidence, not live edge. The importance is methodological: the research repo now demonstrates correct implementation, consistent accounting, and controlled baseline comparison.
+The synthetic parameter sweep tells the same story in a broader grid. The best cells in `results/default_synthetic/cuda_sweep.csv` occur at lower volatility and longer horizon, where spread capture compounds while diffusion risk stays manageable. That sweep is useful for structural sensitivity analysis. It is not evidence that any specific parameter combination would survive real market frictions.
 
-## Parameter Sweep
-The sweep uses the same inventory rules, quote equations, and adverse-selection logic as the default simulator. On this machine it ran on `mps` and produced `results/default_synthetic/cuda_sweep.csv` together with `results/default_synthetic/avs_sweep_heatmap.png`.
+## Empirical Calibration on AAPL 2012-06-21
+The checked-in replay artifact is built from the free LOBSTER AAPL top-10 sample stored under `data/lobster/`. All five quoter rows in `results/cross_symbol_ablation/cross_symbol_ablation.csv` use the same calibrated constants because they replay the same AAPL book and message files. The calibration estimates are:
 
-The best sweep cells were:
+| Date | Symbol | `sigma` | `A` | `kappa` | `epsilon` |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2012-06-21 | AAPL | 0.044287 | 0.258100 | 25.373720 | 0.001322 |
 
-| Rank | Device | Gamma | Sigma | T | Mean terminal PnL | Sharpe |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | mps | 1.00 | 0.50 | 2.0 | 115.8256 | 15.3746 |
-| 2 | mps | 0.50 | 0.50 | 2.0 | 124.2544 | 14.6747 |
-| 3 | mps | 0.10 | 0.50 | 2.0 | 129.8025 | 13.7046 |
+These numbers are informative, but they should be read narrowly.
 
-The broad pattern is intuitive:
+`sigma = 0.044287` is an intraday top-of-book diffusion estimate, not a robust daily volatility parameter. `A = 0.258100` is a low baseline arrival scale because the replay abstraction only sees top-of-book fills and does not reconstruct full venue liquidity. `kappa = 25.373720` is steep, which means fill probability decays quickly with quote distance; small changes in placement matter a lot. `epsilon = 0.001322` is small in price units, but it still matters because replay PnL is also measured in small price increments per fill. The honest read is that these are usable local constants for one AAPL sample day, not portable market constants.
 
-- Lower volatility and longer horizon improve synthetic Sharpe in this setup because spread capture compounds while diffusion risk remains manageable.
-- Higher `gamma` reduces inventory excursions and can improve risk-adjusted performance even when it reduces aggressiveness.
-- The model remains sensitive to the chosen fill-intensity scale `A`, so the sweep should be read as structural sensitivity analysis, not a parameter search for a live strategy.
+That last point matters for interpretation. Because all quoters share the same calibration and the replay is top-of-book only, the replay is better at checking internal consistency than at separating subtly different quoting policies. It is very good for answering "did the code use the same market assumptions across strategies?" It is not yet good for answering "which strategy is robustly better across days and symbols?"
 
-## Replay and Calibration Status
-No real LOBSTER sample is currently stored under `data/lobster/`. The repo therefore behaves as follows:
+That distinction is why the next data purchase would matter more than another round of parameter tuning. Multi-day LOBSTER would let the same calibration pipeline answer questions that the current artifact cannot: whether `kappa` is stable across sessions, whether `epsilon` changes materially around open and close, whether inventory-skewed quoters fail only on this AAPL path or systematically across names, and whether the random-quoter outperformance disappears once luck is averaged out. Without that panel dimension, the right scientific stance is implementation validation, not performance extrapolation.
+That is the difference between a credible research memo and a one-day anecdote.
 
-- `make calibrate` fails with a direct missing-data message rather than silently fabricating inputs.
-- `make backtest` fails with the same direct message.
-- Replay and calibration logic are still exercised by fixture-based tests under `tests/fixtures/`.
+## Cross-Symbol Ablation (Week 2 Deliverable)
+The Week 2 design originally aimed for a multi-day robustness panel. The free LOBSTER constraint forced a methodology pivot documented in `docs/ablation_report.md`: use a shared date across symbols when data are available, and treat the result as a cross-sectional sanity check rather than a time-series robustness claim. In the checked-in repo artifact, the pipeline is present, but the recorded result is the AAPL smoke only: five rows, one per quoter, all for `2012-06-21`.
 
-The calibration path estimates:
+The comparison table below pulls the actual metrics from `results/cross_symbol_ablation/cross_symbol_ablation.csv`.
 
-- `sigma` from top-of-book mid-price changes
-- `A` and `kappa` from empirical trade intensity versus distance from mid
-- `epsilon` from next-step adverse movement after trade-direction events
+| Quoter | Sharpe | Spread capture | Avg abs inventory | Bid fill rate | Ask fill rate | Replay terminal PnL | Replay spread capture | Replay fills |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `avs_optimal` | 0.2871 | 0.006931 | 0.080368 | 0.088 | 0.088 | 662.07 | 7.87% | 972 |
+| `constant_spread` | 0.3376 | 0.007926 | 0.100761 | 0.107 | 0.094 | 662.17 | 7.89% | 972 |
+| `inventory_linear` | 0.3379 | 0.006901 | 0.082401 | 0.093 | 0.082 | 13.55 | 7.89% | 846 |
+| `random` | 0.2676 | 0.007781 | 0.095107 | 0.124 | 0.100 | 742.95 | 6.11% | 1207 |
+| `symmetric` | 0.3231 | 0.006348 | 0.084112 | 0.082 | 0.079 | 662.17 | 7.89% | 972 |
 
-Those estimates are intentionally simple because the replay model itself is simple. It would be misleading to claim full microstructure calibration without queue state, venue fragmentation, latency, and partial fill modeling.
+Three points matter more than the raw ranking.
 
-## What Did Not Work
-Several issues surfaced during implementation and were fixed explicitly:
+First, AVS-optimal, symmetric, and constant-spread all collapse onto the same replay baseline: about `$662` terminal PnL on `972` fills with `7.9%` replay spread capture. That is not a failure of the experiment. It is a clue about the model and the data. All three quote rules are disciplined, all three use the same AAPL calibration, and the replay itself is top-of-book only with no queue priority or latency. Under those conditions, it is unsurprising that they land on essentially the same realized path.
 
-1. The original repo used a repo-local `.venv`, which conflicted with the drive-level environment contract.
-2. The original sweep path used a simplified torch simulation that did not match the core synthetic engine semantics.
-3. The shared drive environment had broken `matplotlib` metadata and ExFAT `._*` sidecar files that prevented plotting imports until the packages were reinstalled and cleaned.
-4. The derivation and memo were placeholder outlines, which made the repo look unfinished despite a decent code scaffold.
+Second, `InventoryLinearMM` and `RandomQuoter` diverge for reasons that are easy to explain from the code. `InventoryLinearMM` uses a linear skew with `lambda_q = 1` in `src/p2/baselines.py`. Once `|q| > 0`, it widens one side and narrows the other aggressively. In replay that means it often becomes too one-sided too early, which protects inventory but gives up fills. The artifact shows exactly that failure mode: replay fills fall to `846`, and replay terminal PnL collapses to `$13.55`. The low replay average absolute inventory, `2.27`, is not evidence of superiority; it is evidence that the strategy stops trading the moment inventory pressure appears.
 
-There is still one unresolved infrastructure tension: the drive-level root notes mention Python `3.11 via uv`, while the operational shared environment used here is Python `3.14.3`. The repo runs correctly now, but that version-policy mismatch should be cleaned up later.
+Third, `RandomQuoter` posts the highest replay PnL, `$742.95`, but that is not an investable conclusion. The same row has the worst replay spread capture, `6.11%`, the highest replay average absolute inventory, `63.96`, and the most fills, `1207`. The correct reading is path luck. On this one day, random quote placement happened to harvest more gross PnL, but it did so with weaker spread quality and much larger inventory exposure. That is the opposite of the kind of result I would defend in an interview as a stable edge.
+
+The synthetic metrics in the same table should also be interpreted carefully. The Sharpe values, `0.268` to `0.338`, are close enough that I do not treat the ordering as meaningful on one AAPL calibration. They show that the five quoters live in the same rough operating regime under the shared simulator. They do not establish a robust cross-symbol winner. The honest conclusion for Week 2 is therefore narrow: the ablation pipeline works, the AAPL smoke reproduces the validated baseline, and the real ranking exercise still requires paid multi-day LOBSTER or a richer dataset such as ITCH or TAQ.
+
+That is still a useful result in interview terms. Many market-making projects fail at the boring part: the baseline cannot be reproduced twice, different strategies use slightly different execution rules, or the writeup quietly avoids explaining why a naive control beat the supposedly optimal one. This artifact does the opposite. It shows exactly where the disciplined quoters agree, exactly how the crude quoters fail, and exactly why one lucky random path is not enough to override microstructure intuition. That is a stronger research posture than presenting a noisier but less interpretable leaderboard.
+
+## Glosten-Milgrom Adverse-Selection Sensitivity (Week 1 Deliverable)
+The Week 1 extension adds the information asymmetry that the plain Avellaneda-Stoikov model leaves out. In `src/p2/glosten_milgrom.py`, a fraction `mu` of traders is informed about a latent binary value state. The market maker observes the sign of incoming trades and updates the posterior probability of the high-value state via Bayes.
+
+The clean way to understand the update is in log-odds form. Let
+`p_t = P(V = v_high | order flow up to t)` and
+`ell_t = log(p_t / (1 - p_t))`. A buy order adds
+`log((1 + mu) / (1 - mu))` to `ell_t`; a sell order subtracts the same amount. As
+`mu` rises, each trade carries more information, so the posterior swings faster
+for the same observed order-flow imbalance. That is exactly the adverse-selection
+story market makers care about: when flow is more informed, a streak of buys is
+not just inventory flow, it is evidence that your stale ask is too cheap.
+
+The repo currently couples that logic to AVS through intensity adjustment:
+
+- `lambda_buy = lambda_baseline * (1 - mu + 2 * mu * p_t)`
+- `lambda_sell = lambda_baseline * (1 - mu + 2 * mu * (1 - p_t))`
+
+When `p_t = 0.5`, the adjustment disappears and the model falls back to the plain
+AvS intensity. When `p_t > 0.5`, buy-side flow is more likely, so ask fills become
+more toxic and the dealer's subjective fair value shifts upward. In the language
+of the derivation appendix, the AVS reservation price and the GM posterior mean
+act on the same object. Inventory risk shifts the reservation price by
+`-q * gamma * sigma^2 * (T - t)`. Adverse selection shifts it by the posterior
+mean relative to the mid. Those effects are additive in the quoting rule even
+though they come from different economic channels.
+
+The practical sensitivity claim is therefore straightforward. As `mu` increases,
+the posterior responds more sharply to the same trade sequence, the effective
+intensities become more one-sided, and the economically sensible quoting response
+is more conservative. In a fully solved coupled HJB, that means a more skewed
+reservation price and effectively wider exposure against informed flow. In this
+repo, `mu` is still a scenario variable rather than a calibrated parameter, so the
+GM layer is best understood as a structurally correct adverse-selection extension,
+not yet as a production-ready estimate of toxicity.
 
 ## Limitations
-The main limitations are structural, not hidden:
+The main limitations are structural and should be stated directly.
 
-- Independent Poisson bid and ask arrivals are a stylized approximation.
-- There is no queue-position model.
-- Replay is top-of-book only.
-- Spread capture in the simulator is optimistic relative to a real venue with latency, competition, and cancellations.
-- The default synthetic run is useful for replication and reasoning, not for claiming deployable profitability.
+- The checked-in LOBSTER evidence is one trading day, `2012-06-21`, for one symbol, AAPL. That is enough to validate the replay and calibration path, not enough to claim cross-day robustness.
+- The replay is top-of-book only. There is no venue fragmentation, latency model, partial-fill model, or true queue-priority reconstruction.
+- The queue-reactive machinery exists in `src/p2/queue.py`, but it is not yet jointly solved with the Glosten-Milgrom information layer inside one coupled control problem.
+- The GM informed-trader fraction `mu` is not calibrated from data in this session. It is treated as a scenario parameter.
+- Independent Poisson fill intensities remain a stylized approximation even after the queue and GM corrections.
+- Spread capture in simulation is still optimistic relative to a live venue with competing market makers, cancellations, and stale-quote risk.
+- None of these artifacts should be read as evidence of deployable profitability.
 
-## Conclusion
-P2 is now in the right shape for interview discussion. It shows:
-
-- the HJB solution is implemented correctly
-- the simulator, baselines, and sweep share one consistent set of assumptions
-- inventory control is handled explicitly
-- replay and calibration exist, but their limitations are stated clearly
-
-That is the right level of rigor for a market-making project in a QR portfolio: strong analytical grounding, reproducible code, real artifacts, and no false claims about the realism of the backtest.
+That is the right boundary for the project. The repo is strong as a QR interview artifact because it combines mathematical derivation, reproducible code, and an honest account of what the replay can and cannot support. It would stop being strong if it pretended that one free-sample AAPL day settled the strategy question.
