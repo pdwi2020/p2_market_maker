@@ -117,6 +117,23 @@ repo, `mu` is still a scenario variable rather than a calibrated parameter, so t
 GM layer is best understood as a structurally correct adverse-selection extension,
 not yet as a production-ready estimate of toxicity.
 
+## Week 2 — 5-scenario regime sweep
+To keep the Week 2 "week-like" distribution story honest despite having only one checked-in LOBSTER day, I added a five-scenario sweep under `results/lobster_week_sweep/`. `scenario_0_base` is replay-anchored to the AAPL `2012-06-21` calibration and is forced to stay within a documented `+/-15%` tolerance of the checked-in baseline. Scenarios `1` through `4` are synthetic perturbations of that same calibration on the same AAPL event-time grid. They are not independent LOBSTER days.
+
+The sweep uses deterministic seeds `20260424` through `20260428` and reports cumulative PnL curves, inventory paths, max drawdown, per-minute Sharpe, and per-minute information ratio. The selected replay-consistent `gamma` is `0.006`, which reproduces the existing anchor almost exactly: `scenario_0_base` finishes at `$662.16` on `972` fills with `7.88%` spread capture, versus the checked-in `$662.07 / 972 / 7.87%`.
+
+| Scenario | Construction | Terminal PnL | Max DD | Sharpe | IR |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `scenario_0_base` | AAPL replay anchor | 662.16 | 123.83 | 0.1242 | 0.1241 |
+| `scenario_1_high_vol` | `2x sigma` | 411.67 | 100.30 | 0.1281 | 0.1281 |
+| `scenario_2_low_vol` | `0.5x sigma` | 662.15 | 123.83 | 0.1242 | 0.1241 |
+| `scenario_3_thin_book` | `0.5x A`, `2x kappa` | 65.43 | 25.63 | 0.1035 | 0.1038 |
+| `scenario_4_adverse_selection` | `pi = 0.30` vs `0.10` | 627.90 | 177.16 | 0.1175 | 0.1176 |
+
+Three reads matter. First, the base anchor now gives the week story a defensible empirical reference point instead of pretending that five real LOBSTER days exist on disk. Second, the thin-book stress is the harshest liquidity shock: fills fall from `972` to `579`, spread capture is cut roughly in half, and terminal PnL drops to about `$65`. Third, the adverse-selection stress does not destroy gross PnL, but it produces the worst drawdown in the panel, `177.16`, which is exactly the kind of toxicity-sensitive behavior the Glosten-Milgrom extension is supposed to surface.
+
+The low-vol scenario lands almost on top of the base case. I would not over-interpret that as a robust invariance claim. It is a consequence of running a replay-anchored event-time sweep on one AAPL day where the quote threshold is already close to the historical trade prices. In other words, the sweep is useful as a regime-stress narrative and a sensitivity panel, not as evidence that calm-market performance is fully pinned down by one free-sample replay.
+
 ## Limitations
 The main limitations are structural and should be stated directly.
 

@@ -16,9 +16,16 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+MPLCONFIGDIR = Path(tempfile.gettempdir()) / "p2_market_maker_mpl"
+MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(MPLCONFIGDIR))
 
 import matplotlib
 
@@ -28,8 +35,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-
-ROOT = Path(__file__).resolve().parents[1]
 RESULTS_DIR = ROOT / "results" / "readme_figures"
 DEFAULT_SUMMARY = {
     "terminal_pnl": 662.0720632416997,

@@ -99,44 +99,20 @@ the reader can see exactly which approximations were taken.
 ### LOBSTER replay PnL
 ![LOBSTER PnL curve](results/readme_figures/lobster_pnl_curve.png)
 
-Reconstructed mark-to-market PnL from the bundled AAPL sample using
-the checked-in replay calibration. The terminal value lands at about
-`$662`, matching the saved replay summary.
-
 ### Inventory trajectory with hard-limit band
 ![Inventory trajectory](results/readme_figures/inventory_trajectory.png)
-
-Replay inventory path across the same AAPL session, with the
-configured `±Q_max` band shaded for reference. The plot is sourced from
-the same replay reconstruction used for the PnL curve.
 
 ### Fill price distribution (relative to mid)
 ![Fill distribution](results/readme_figures/fill_distribution.png)
 
-Histogram of replay fill prices relative to the contemporaneous mid,
-shown separately for bid-side and ask-side fills. The checked-in
-snapshot yields `972` fills in total.
-
 ### HJB quote example (theoretical)
 ![HJB optimal quotes with inventory skew](results/readme_figures/hjb_quote_example.png)
-
-Closed-form Avellaneda-Stoikov bid and ask quotes versus time to
-horizon for `q=0`, `q=+5`, and `q=-5`, using repo-style model
-parameters from `configs/`.
 
 ### Ablation: AvS vs heuristic quoters
 ![Ablation](results/readme_figures/ablation_quoters.png)
 
-Replay-side terminal PnL comparison across the checked-in quoter
-ablation snapshot. When ablation artifacts are absent, the renderer
-falls back to an AvS-only bar with explicit `n/a` annotations.
-
 ### Parameter sweep heatmap
 ![Gamma × Kappa sweep heatmap](results/default_synthetic/avs_sweep_heatmap.png)
-
-Existing synthetic sensitivity figure from the repo snapshot, retained
-here as the compact view of how Sharpe changes across the
-checked-in parameter sweep.
 
 ## How to reproduce
 
