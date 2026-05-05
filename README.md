@@ -187,3 +187,24 @@ portfolio prepared for buy-side QR internship applications
 ## License
 
 MIT. See `LICENSE`.
+
+## Data Sources
+
+All data sourced from the X9 DuckDB catalog at `/Volumes/Crucial X9/data/catalog.duckdb`.
+
+| View | Description | Size |
+|---|---|---|
+| `bybit_btc_lob` | Bybit BTC L2 order book (15s snapshots, 2025–2026) | 60 GB |
+| `bybit_eth_lob` | Bybit ETH L2 order book | — |
+| `hl_btc_l2` | Hyperliquid BTC L2 | — |
+
+**Local loader**: `src/p2/data/bybit_loader.py`
+```python
+from src.p2.data.bybit_loader import load_bybit_lob, estimate_adverse_selection
+lob = load_bybit_lob("BTC", "2025-01-01", "2025-06-30")
+```
+
+Run real LOB simulation (vs synthetic Poisson):
+```bash
+make simulate-real
+```
