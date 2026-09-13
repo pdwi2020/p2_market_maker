@@ -61,6 +61,7 @@ def run_lobster_backtest(config: P2Config) -> BacktestResult:
         order_size=config.queue_model.order_size,
         cancellation_rule=config.queue_model.cancellation_rule,
         latency_ms=config.replay.latency_ms,
+        inventory_limit=config.inventory.Q_max,
     )
 
 

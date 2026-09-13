@@ -168,6 +168,7 @@ def test_aapl_replay_has_no_marketable_fills() -> None:
     result = run_lobster_backtest(config)
 
     assert result.marketable_fill_count == 0
+    assert np.max(np.abs(result.inventory_path)) <= config.inventory.Q_max
 
 
 def test_latency_exposes_stale_quote_to_pickoff(tmp_path: Path) -> None:
@@ -199,3 +200,30 @@ def test_latency_exposes_stale_quote_to_pickoff(tmp_path: Path) -> None:
 
     assert len(current_result.fill_times) == 0
     assert len(stale_result.fill_times) == 1
+
+
+def test_replay_inventory_limit_suppresses_risk_increasing_side(tmp_path: Path) -> None:
+    orderbook_file = tmp_path / "inventory_limit_orderbook.csv"
+    message_file = tmp_path / "inventory_limit_message.csv"
+    orderbook_file.write_text("\n".join(["1010000,5,990000,1"] * 5))
+    message_file.write_text(
+        "\n".join(
+            [
+                "34200.0,1,1,1,1000000,1",
+                "34200.1,4,2,1,990000,1",
+                "34200.2,4,3,1,990000,1",
+                "34200.3,4,4,1,990000,1",
+                "34200.4,4,5,1,990000,1",
+            ]
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+
+    result = replayer.run_strategy(
+        lambda mid, inventory, t: (99.0, 103.0),
+        latency_ms=0.0,
+        inventory_limit=2,
+    )
+
+    assert result.inventory_path[-1] == 2
+    assert np.max(np.abs(result.inventory_path)) == 2

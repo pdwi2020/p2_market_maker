@@ -215,6 +215,7 @@ def run_symbol_sweep(
             replay_result = replayer.run_strategy(
                 quoter.quotes,
                 session_duration_seconds=DEFAULT_REPLAY_T,
+                inventory_limit=DEFAULT_Q_MAX,
             )
             rows.append(
                 {

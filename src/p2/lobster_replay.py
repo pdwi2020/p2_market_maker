@@ -111,9 +111,12 @@ class LOBSTERReplayer:
         order_size: int = 1,
         cancellation_rule: Literal["cancel-from-back", "proportional"] = "proportional",
         latency_ms: float = 1.0,
+        inventory_limit: int | None = None,
     ) -> BacktestResult:
         if latency_ms < 0.0:
             raise ValueError("latency_ms must be non-negative")
+        if inventory_limit is not None and inventory_limit < 1:
+            raise ValueError("inventory_limit must be positive")
         if use_queue_position:
             return self._run_queue_aware_strategy(
                 strategy_fn,
@@ -122,12 +125,14 @@ class LOBSTERReplayer:
                 order_size,
                 cancellation_rule,
                 latency_ms,
+                inventory_limit,
             )
         return self._run_instantaneous_strategy(
             strategy_fn,
             session_duration_seconds,
             post_only_mode,
             latency_ms,
+            inventory_limit,
         )
 
     def _run_instantaneous_strategy(
@@ -136,6 +141,7 @@ class LOBSTERReplayer:
         session_duration_seconds: float,
         post_only_mode: Literal["reprice", "reject"],
         latency_ms: float,
+        inventory_limit: int | None,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -176,6 +182,14 @@ class LOBSTERReplayer:
                     best_ask=float(ask_price_pre[decision_idx]),
                     mode=post_only_mode,
                 )
+                bid, ask = _apply_inventory_limit(
+                    bid,
+                    ask,
+                    inventory=inventory,
+                    inventory_limit=inventory_limit,
+                    bid_size=1,
+                    ask_size=1,
+                )
 
             if int(event_type[idx]) not in {4, 5}:
                 inventory_path[idx + 1] = inventory
@@ -213,6 +227,7 @@ class LOBSTERReplayer:
         order_size: int,
         cancellation_rule: Literal["cancel-from-back", "proportional"],
         latency_ms: float,
+        inventory_limit: int | None,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -286,6 +301,14 @@ class LOBSTERReplayer:
                     best_bid=float(bid_price_pre[decision_idx, 0]),
                     best_ask=float(ask_price_pre[decision_idx, 0]),
                     mode=post_only_mode,
+                )
+                bid, ask = _apply_inventory_limit(
+                    bid,
+                    ask,
+                    inventory=inventory,
+                    inventory_limit=inventory_limit,
+                    bid_size=order_size,
+                    ask_size=order_size,
                 )
             bid_order = _refresh_order_state(
                 order=bid_order,
@@ -517,3 +540,21 @@ def _decision_indices(times: np.ndarray, latency_ms: float) -> np.ndarray:
         return np.asarray([], dtype=int)
     activation_cutoff = values - float(latency_ms) / 1_000.0
     return np.searchsorted(values, activation_cutoff + 1e-12, side="right") - 1
+
+
+def _apply_inventory_limit(
+    bid: float | None,
+    ask: float | None,
+    *,
+    inventory: int,
+    inventory_limit: int | None,
+    bid_size: int,
+    ask_size: int,
+) -> tuple[float | None, float | None]:
+    if inventory_limit is None:
+        return bid, ask
+    if inventory + bid_size > inventory_limit:
+        bid = None
+    if inventory - ask_size < -inventory_limit:
+        ask = None
+    return bid, ask
