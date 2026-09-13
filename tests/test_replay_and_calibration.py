@@ -164,12 +164,12 @@ def test_post_only_quotes_are_repriced_or_rejected(
 
 
 def test_aapl_replay_has_no_marketable_fills() -> None:
-    data_dir = Path(__file__).resolve().parents[1] / "data" / "lobster"
+    config = load_config(Path(__file__).resolve().parents[1] / "configs" / "p2_config.yaml")
+    data_dir = config.paths.lobster_dir
     orderbook_file = data_dir / "AAPL_2012-06-21_34200000_57600000_orderbook_10.csv"
     message_file = data_dir / "AAPL_2012-06-21_34200000_57600000_message_10.csv"
     if not orderbook_file.exists() or not message_file.exists():
         pytest.skip("local AAPL LOBSTER sample is unavailable")
-    config = load_config(Path(__file__).resolve().parents[1] / "configs" / "p2_config.yaml")
 
     result = run_lobster_backtest(config)
 

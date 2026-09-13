@@ -3,7 +3,10 @@ from pathlib import Path
 from p2.config import P2Config, REPO_ROOT, default_config_path, ensure_run_directories, load_config, resolve_path
 
 
-def test_load_config_has_expected_sections() -> None:
+def test_load_config_has_expected_sections(monkeypatch) -> None:
+    monkeypatch.delenv("P2_DATA_DIR", raising=False)
+    monkeypatch.delenv("P2_CACHE_DIR", raising=False)
+    monkeypatch.delenv("P2_LAKE_DIR", raising=False)
     config = load_config(default_config_path())
     assert config.run_name == "default_synthetic"
     assert config.simulation.n_paths == 1000
