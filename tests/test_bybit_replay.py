@@ -4,7 +4,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from p2.bybit_replay import ReplaySettings, StrategySpec, replay_bybit_day
+from p2.bybit_replay import (
+    ReplaySettings,
+    StrategySpec,
+    load_bybit_events,
+    replay_bybit_day,
+)
 from p2.research_models import DailyCalibration
 
 
@@ -122,6 +127,31 @@ def test_symmetric_replay_tracks_queue_fee_and_inventory(tmp_path: Path) -> None
     assert result.gross_pnl == pytest.approx(0.01)
     assert result.net_pnl == pytest.approx(0.0098)
     assert result.decomposition.net_pnl == pytest.approx(result.net_pnl)
+
+
+def test_loaded_events_can_be_reused_across_replays(tmp_path: Path) -> None:
+    source = tmp_path / "events.parquet"
+    _write_stream(source, bid_sizes=(1.0,), trade_volume=1.01)
+    events = load_bybit_events(source)
+
+    first = replay_bybit_day(
+        events,
+        symbol="BTCUSDT",
+        date="2025-07-01",
+        strategy=StrategySpec("symmetric"),
+        calibration=CALIBRATION,
+        settings=ReplaySettings(latency_ms=0),
+    )
+    second = replay_bybit_day(
+        events,
+        symbol="BTCUSDT",
+        date="2025-07-01",
+        strategy=StrategySpec("symmetric"),
+        calibration=CALIBRATION,
+        settings=ReplaySettings(latency_ms=0),
+    )
+
+    assert first == second
 
 
 def test_cancellation_rules_change_queue_advance(tmp_path: Path) -> None:

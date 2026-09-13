@@ -142,7 +142,9 @@ class _QuoteCommand:
 
 
 @dataclass(frozen=True)
-class _EventArrays:
+class BybitEventArrays:
+    """Columnar event data reusable across multiple strategy replays."""
+
     times: np.ndarray
     is_book: np.ndarray
     book_times: np.ndarray
@@ -171,7 +173,8 @@ def _list_storage(column: pa.ChunkedArray) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-def _load_events(source: str | Path) -> _EventArrays:
+def load_bybit_events(source: str | Path) -> BybitEventArrays:
+    """Load one reconstructed stream into reusable columnar arrays."""
     table = pq.read_table(
         Path(source),
         columns=[
@@ -204,7 +207,7 @@ def _load_events(source: str | Path) -> _EventArrays:
     _, bid_sizes = _list_storage(book["bid_sizes"])
     ask_offsets, ask_prices = _list_storage(book["ask_prices"])
     _, ask_sizes = _list_storage(book["ask_sizes"])
-    return _EventArrays(
+    return BybitEventArrays(
         times=times,
         is_book=is_book,
         book_times=book_times,
@@ -386,7 +389,7 @@ def _fill_markouts(
 
 
 def replay_bybit_day(
-    source: str | Path,
+    source: str | Path | BybitEventArrays,
     *,
     symbol: str,
     date: str,
@@ -395,7 +398,7 @@ def replay_bybit_day(
     settings: ReplaySettings = ReplaySettings(),
 ) -> DailyReplayResult:
     """Replay one reconstructed symbol-day with delayed queue-aware quotes."""
-    events = _load_events(source)
+    events = source if isinstance(source, BybitEventArrays) else load_bybit_events(source)
     if len(events.times) == 0 or len(events.book_times) == 0:
         raise ValueError("event stream is empty")
     if np.any(np.diff(events.times) < 0):
