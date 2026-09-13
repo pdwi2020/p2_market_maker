@@ -7,7 +7,12 @@ from p2.baselines import AvSOptimalMM, SymmetricMM
 from p2.backtest import pnl_attribution, run_lobster_backtest, write_backtest_outputs
 from p2.calibration import calibrate_from_replay_files, write_calibration
 from p2.config import load_config
-from p2.lobster_replay import LOBSTERReplayer, ReplayFill, _average_markout
+from p2.lobster_replay import (
+    LOBSTERReplayer,
+    ReplayFill,
+    _average_markout,
+    _decision_indices,
+)
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -75,6 +80,62 @@ def test_replay_passes_elapsed_session_time_to_strategy() -> None:
 
     assert observed_times == pytest.approx([0.0, 0.1, 0.2, 0.3])
     assert np.all(23_400.0 - np.asarray(observed_times) > 0.0)
+
+
+def test_decision_indices_apply_requote_cadence_before_latency() -> None:
+    times = np.asarray([0.0, 0.05, 0.10, 0.15, 0.20])
+
+    assert _decision_indices(times, 0.0, 100.0).tolist() == [0, 0, 2, 2, 4]
+    assert _decision_indices(times, 10.0, 100.0).tolist() == [-1, 0, 0, 2, 2]
+
+
+@pytest.mark.parametrize("use_queue_position", [False, True])
+def test_touch_aware_strategy_runs_only_on_requotes(
+    tmp_path: Path,
+    use_queue_position: bool,
+) -> None:
+    orderbook_file = tmp_path / "touch_orderbook.csv"
+    message_file = tmp_path / "touch_message.csv"
+    orderbook_file.write_text(
+        "\n".join(
+            f"1010000,{20 + idx},990000,{10 + idx}" for idx in range(5)
+        )
+    )
+    message_file.write_text(
+        "\n".join(
+            f"{34200 + 0.05 * idx:.2f},1,{idx + 1},1,1000000,1"
+            for idx in range(5)
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+    observations: list[tuple[float, float, float, float]] = []
+
+    def strategy(
+        mid: float,
+        inventory: int,
+        elapsed: float,
+        best_bid: float,
+        best_ask: float,
+        bid_size: float,
+        ask_size: float,
+    ) -> tuple[float, float]:
+        del mid, inventory, elapsed
+        observations.append((best_bid, best_ask, bid_size, ask_size))
+        return best_bid, best_ask
+
+    replayer.run_strategy(
+        strategy,
+        use_queue_position=use_queue_position,
+        latency_ms=0.0,
+        requote_ms=100.0,
+        touch_aware=True,
+    )
+
+    assert observations == [
+        (99.0, 101.0, 10.0, 20.0),
+        (99.0, 101.0, 11.0, 21.0),
+        (99.0, 101.0, 13.0, 23.0),
+    ]
 
 
 def test_inventory_aware_quotes_differ_from_symmetric_during_session() -> None:

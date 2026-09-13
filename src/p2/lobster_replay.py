@@ -11,6 +11,7 @@ import pandas as pd
 
 
 DEFAULT_SESSION_DURATION_SECONDS = 23_400.0
+StrategyFunction = Callable[..., tuple[float, float]]
 
 
 @dataclass(slots=True)
@@ -138,7 +139,7 @@ class LOBSTERReplayer:
 
     def run_strategy(
         self,
-        strategy_fn: Callable[[float, int, float], tuple[float, float]],
+        strategy_fn: StrategyFunction,
         *,
         use_queue_position: bool = False,
         session_duration_seconds: float = DEFAULT_SESSION_DURATION_SECONDS,
@@ -146,12 +147,16 @@ class LOBSTERReplayer:
         order_size: int = 1,
         cancellation_rule: Literal["cancel-from-back", "proportional"] = "proportional",
         latency_ms: float = 1.0,
+        requote_ms: float = 0.0,
+        touch_aware: bool = False,
         inventory_limit: int | None = None,
         maker_rebate_per_share: float = 0.0025,
         taker_fee_per_share: float = 0.0030,
     ) -> BacktestResult:
         if latency_ms < 0.0:
             raise ValueError("latency_ms must be non-negative")
+        if requote_ms < 0.0:
+            raise ValueError("requote_ms must be non-negative")
         if inventory_limit is not None and inventory_limit < 1:
             raise ValueError("inventory_limit must be positive")
         if maker_rebate_per_share < 0.0 or taker_fee_per_share < 0.0:
@@ -164,6 +169,8 @@ class LOBSTERReplayer:
                 order_size,
                 cancellation_rule,
                 latency_ms,
+                requote_ms,
+                touch_aware,
                 inventory_limit,
                 maker_rebate_per_share,
                 taker_fee_per_share,
@@ -173,6 +180,8 @@ class LOBSTERReplayer:
             session_duration_seconds,
             post_only_mode,
             latency_ms,
+            requote_ms,
+            touch_aware,
             inventory_limit,
             maker_rebate_per_share,
             taker_fee_per_share,
@@ -180,10 +189,12 @@ class LOBSTERReplayer:
 
     def _run_instantaneous_strategy(
         self,
-        strategy_fn: Callable[[float, int, float], tuple[float, float]],
+        strategy_fn: StrategyFunction,
         session_duration_seconds: float,
         post_only_mode: Literal["reprice", "reject"],
         latency_ms: float,
+        requote_ms: float,
+        touch_aware: bool,
         inventory_limit: int | None,
         maker_rebate_per_share: float,
         taker_fee_per_share: float,
@@ -195,11 +206,15 @@ class LOBSTERReplayer:
         ask_price_post = self.orderbook["ask_price_1"].to_numpy(dtype=float)
         bid_price_pre = np.concatenate(([bid_price_post[0]], bid_price_post[:-1]))
         ask_price_pre = np.concatenate(([ask_price_post[0]], ask_price_post[:-1]))
+        bid_size_post = self.orderbook["bid_size_1"].to_numpy(dtype=float)
+        ask_size_post = self.orderbook["ask_size_1"].to_numpy(dtype=float)
+        bid_size_pre = np.concatenate(([bid_size_post[0]], bid_size_post[:-1]))
+        ask_size_pre = np.concatenate(([ask_size_post[0]], ask_size_post[:-1]))
         mids = 0.5 * (bid_price_pre + ask_price_pre)
         prices = self.messages["price"].to_numpy(dtype=float) if "price" in self.messages else mids
         times = self.messages["time"].to_numpy(dtype=float) if "time" in self.messages else np.arange(len(mids), dtype=float)
         strategy_times = _session_times(times, session_duration_seconds)
-        decision_indices = _decision_indices(times, latency_ms)
+        decision_indices = _decision_indices(times, latency_ms, requote_ms)
         event_type = self.messages["event_type"].to_numpy(dtype=int) if "event_type" in self.messages else np.full(len(mids), 4)
         direction = self.messages["direction"].to_numpy(dtype=int) if "direction" in self.messages else np.zeros(len(mids), dtype=int)
 
@@ -208,6 +223,9 @@ class LOBSTERReplayer:
         cash = 0.0
         inventory_path = np.zeros(n_rows + 1, dtype=int)
         fills: list[ReplayFill] = []
+        active_decision_idx = -2
+        active_bid: float | None = None
+        active_ask: float | None = None
 
         for idx in range(n_rows):
             t = float(strategy_times[idx])
@@ -216,16 +234,29 @@ class LOBSTERReplayer:
             bid: float | None = None
             ask: float | None = None
             if decision_idx >= 0:
-                decision_mid = float(mids[decision_idx])
-                decision_t = float(strategy_times[decision_idx])
-                bid_quote, ask_quote = strategy_fn(decision_mid, int(inventory), decision_t)
-                bid, ask = _apply_post_only(
-                    float(bid_quote),
-                    float(ask_quote),
-                    best_bid=float(bid_price_pre[decision_idx]),
-                    best_ask=float(ask_price_pre[decision_idx]),
-                    mode=post_only_mode,
-                )
+                if decision_idx != active_decision_idx:
+                    decision_mid = float(mids[decision_idx])
+                    decision_t = float(strategy_times[decision_idx])
+                    bid_quote, ask_quote = _call_strategy(
+                        strategy_fn,
+                        touch_aware=touch_aware,
+                        mid=decision_mid,
+                        inventory=int(inventory),
+                        elapsed_seconds=decision_t,
+                        best_bid=float(bid_price_pre[decision_idx]),
+                        best_ask=float(ask_price_pre[decision_idx]),
+                        bid_size=float(bid_size_pre[decision_idx]),
+                        ask_size=float(ask_size_pre[decision_idx]),
+                    )
+                    active_bid, active_ask = _apply_post_only(
+                        float(bid_quote),
+                        float(ask_quote),
+                        best_bid=float(bid_price_pre[decision_idx]),
+                        best_ask=float(ask_price_pre[decision_idx]),
+                        mode=post_only_mode,
+                    )
+                    active_decision_idx = decision_idx
+                bid, ask = active_bid, active_ask
                 bid, ask = _apply_inventory_limit(
                     bid,
                     ask,
@@ -282,12 +313,14 @@ class LOBSTERReplayer:
 
     def _run_queue_aware_strategy(
         self,
-        strategy_fn: Callable[[float, int, float], tuple[float, float]],
+        strategy_fn: StrategyFunction,
         session_duration_seconds: float,
         post_only_mode: Literal["reprice", "reject"],
         order_size: int,
         cancellation_rule: Literal["cancel-from-back", "proportional"],
         latency_ms: float,
+        requote_ms: float,
+        touch_aware: bool,
         inventory_limit: int | None,
         maker_rebate_per_share: float,
         taker_fee_per_share: float,
@@ -297,7 +330,7 @@ class LOBSTERReplayer:
 
         times = self.messages["time"].to_numpy(dtype=float) if "time" in self.messages else np.arange(len(self.orderbook), dtype=float)
         strategy_times = _session_times(times, session_duration_seconds)
-        decision_indices = _decision_indices(times, latency_ms)
+        decision_indices = _decision_indices(times, latency_ms, requote_ms)
         prices = self.messages["price"].to_numpy(dtype=float) if "price" in self.messages else self.mid_price_series().to_numpy(dtype=float)
         sizes = self.messages["size"].to_numpy(dtype=float) if "size" in self.messages else np.ones(len(self.orderbook), dtype=float)
         event_type = self.messages["event_type"].to_numpy(dtype=int) if "event_type" in self.messages else np.full(len(self.orderbook), 4)
@@ -344,6 +377,9 @@ class LOBSTERReplayer:
         cancel_volume = 0.0
         bid_order = _RestingOrder()
         ask_order = _RestingOrder()
+        active_decision_idx = -2
+        active_bid: float | None = None
+        active_ask: float | None = None
 
         for idx in range(n_rows):
             t = float(strategy_times[idx])
@@ -353,16 +389,29 @@ class LOBSTERReplayer:
             bid: float | None = None
             ask: float | None = None
             if decision_idx >= 0:
-                decision_mid = float(mids[decision_idx])
-                decision_t = float(strategy_times[decision_idx])
-                bid_quote, ask_quote = strategy_fn(decision_mid, int(inventory), decision_t)
-                bid, ask = _apply_post_only(
-                    float(bid_quote),
-                    float(ask_quote),
-                    best_bid=float(bid_price_pre[decision_idx, 0]),
-                    best_ask=float(ask_price_pre[decision_idx, 0]),
-                    mode=post_only_mode,
-                )
+                if decision_idx != active_decision_idx:
+                    decision_mid = float(mids[decision_idx])
+                    decision_t = float(strategy_times[decision_idx])
+                    bid_quote, ask_quote = _call_strategy(
+                        strategy_fn,
+                        touch_aware=touch_aware,
+                        mid=decision_mid,
+                        inventory=int(inventory),
+                        elapsed_seconds=decision_t,
+                        best_bid=float(bid_price_pre[decision_idx, 0]),
+                        best_ask=float(ask_price_pre[decision_idx, 0]),
+                        bid_size=float(bid_size_pre[decision_idx, 0]),
+                        ask_size=float(ask_size_pre[decision_idx, 0]),
+                    )
+                    active_bid, active_ask = _apply_post_only(
+                        float(bid_quote),
+                        float(ask_quote),
+                        best_bid=float(bid_price_pre[decision_idx, 0]),
+                        best_ask=float(ask_price_pre[decision_idx, 0]),
+                        mode=post_only_mode,
+                    )
+                    active_decision_idx = decision_idx
+                bid, ask = active_bid, active_ask
                 bid, ask = _apply_inventory_limit(
                     bid,
                     ask,
@@ -703,12 +752,57 @@ def _apply_post_only(
     return bid, ask
 
 
-def _decision_indices(times: np.ndarray, latency_ms: float) -> np.ndarray:
+def _call_strategy(
+    strategy_fn: StrategyFunction,
+    *,
+    touch_aware: bool,
+    mid: float,
+    inventory: int,
+    elapsed_seconds: float,
+    best_bid: float,
+    best_ask: float,
+    bid_size: float,
+    ask_size: float,
+) -> tuple[float, float]:
+    if touch_aware:
+        return strategy_fn(
+            mid,
+            inventory,
+            elapsed_seconds,
+            best_bid,
+            best_ask,
+            bid_size,
+            ask_size,
+        )
+    return strategy_fn(mid, inventory, elapsed_seconds)
+
+
+def _decision_indices(
+    times: np.ndarray,
+    latency_ms: float,
+    requote_ms: float = 0.0,
+) -> np.ndarray:
     values = np.asarray(times, dtype=float)
     if values.size == 0:
         return np.asarray([], dtype=int)
-    activation_cutoff = values - float(latency_ms) / 1_000.0
-    return np.searchsorted(values, activation_cutoff + 1e-12, side="right") - 1
+    requote_seconds = float(requote_ms) / 1_000.0
+    if requote_seconds <= 0.0:
+        candidates = np.arange(values.size, dtype=int)
+    else:
+        buckets = np.floor((values - values[0] + 1e-9) / requote_seconds)
+        candidates = np.flatnonzero(
+            np.concatenate(([True], np.diff(buckets) > 0.0))
+        )
+    activation_times = values[candidates] + float(latency_ms) / 1_000.0
+    active_positions = np.searchsorted(
+        activation_times,
+        values + 1e-12,
+        side="right",
+    ) - 1
+    output = np.full(values.size, -1, dtype=int)
+    active = active_positions >= 0
+    output[active] = candidates[active_positions[active]]
+    return output
 
 
 def _apply_inventory_limit(
