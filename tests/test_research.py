@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,29 @@ def test_required_bybit_dates_cover_locked_windows() -> None:
     assert len(schedule["ETHUSDT"]) == 86
     assert schedule["ETHUSDT"][0:2] == ("2025-07-01", "2025-07-02")
     assert schedule["ETHUSDT"][-2:] == ("2026-04-21", "2026-04-22")
+
+
+def test_available_bybit_dates_requires_both_raw_files(tmp_path: Path) -> None:
+    book_root = (
+        tmp_path
+        / "exchange=bybit"
+        / "instrument_type=orderbook_l2"
+        / "BTCUSDT"
+    )
+    trade_root = (
+        tmp_path / "exchange=bybit" / "instrument_type=trades" / "BTCUSDT"
+    )
+    for value in ("2025-05-01", "2025-05-02"):
+        path = book_root / f"date={value}" / "orderbook.parquet"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"book")
+    trade = trade_root / "date=2025-05-02" / "trades.parquet"
+    trade.parent.mkdir(parents=True)
+    trade.write_bytes(b"trades")
+
+    assert research.available_bybit_dates(tmp_path, "BTCUSDT") == (
+        date.fromisoformat("2025-05-02"),
+    )
 
 
 def test_research_cache_defaults_to_external_volume(monkeypatch) -> None:

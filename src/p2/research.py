@@ -22,6 +22,7 @@ from p2.research_study import (
     SELECTION_START,
     TEST_END,
     TEST_START,
+    eligible_dates,
     run_crypto_study,
 )
 
@@ -44,25 +45,78 @@ def _date_range(start: date, end: date) -> tuple[date, ...]:
     )
 
 
-def _weekly_test_dates() -> tuple[date, ...]:
-    return tuple(day for day in _date_range(TEST_START, TEST_END) if day.weekday() == 2)
-
-
-def required_bybit_dates() -> dict[str, tuple[str, ...]]:
-    """Return the minimal raw-data schedule needed by all crypto studies."""
-    btc_days = set(_date_range(SELECTION_START, TEST_END))
-    btc_days.update(date.fromisoformat(value) for value in CROSSCHECK_DATES)
-    btc_days.update(
-        date.fromisoformat(value) - timedelta(days=1)
-        for value in CROSSCHECK_DATES
+def available_bybit_dates(source_root: str | Path, symbol: str) -> tuple[date, ...]:
+    """Discover dates having both raw book and trade files."""
+    root = Path(source_root)
+    layouts = (
+        (
+            root / "samples" / "bybit" / symbol / "orderbook_l2",
+            root / "samples" / "bybit" / symbol / "trades",
+        ),
+        (
+            root / "exchange=bybit" / "instrument_type=orderbook_l2" / symbol,
+            root / "exchange=bybit" / "instrument_type=trades" / symbol,
+        ),
     )
-    weekly_days = set(_weekly_test_dates())
-    weekly_days.update(day - timedelta(days=1) for day in tuple(weekly_days))
-    return {
-        "BTCUSDT": tuple(day.isoformat() for day in sorted(btc_days)),
-        "ETHUSDT": tuple(day.isoformat() for day in sorted(weekly_days)),
-        "SOLUSDT": tuple(day.isoformat() for day in sorted(weekly_days)),
-    }
+    discovered: set[date] = set()
+    for book_root, trade_root in layouts:
+        book_dates = {
+            path.parent.name.removeprefix("date=")
+            for path in book_root.glob("date=*/orderbook.parquet")
+        }
+        trade_dates = {
+            path.parent.name.removeprefix("date=")
+            for path in trade_root.glob("date=*/trades.parquet")
+        }
+        for value in book_dates & trade_dates:
+            try:
+                discovered.add(date.fromisoformat(value))
+            except ValueError:
+                continue
+    return tuple(sorted(discovered))
+
+
+def required_bybit_dates(
+    available: dict[str, Sequence[date]] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Return the minimal raw-data schedule needed by all crypto studies."""
+    if available is None:
+        available = {
+            "BTCUSDT": _date_range(SELECTION_START, TEST_END),
+            "ETHUSDT": _date_range(TEST_START - timedelta(days=1), TEST_END),
+            "SOLUSDT": _date_range(TEST_START - timedelta(days=1), TEST_END),
+        }
+    btc_targets = set(
+        eligible_dates(
+            available.get("BTCUSDT", ()),
+            SELECTION_START,
+            TEST_END,
+        )
+    )
+    crosscheck_days = {date.fromisoformat(value) for value in CROSSCHECK_DATES}
+    missing_crosscheck = crosscheck_days - btc_targets
+    if missing_crosscheck:
+        missing = [value.isoformat() for value in sorted(missing_crosscheck)]
+        raise ValueError(f"cross-check dates lack prior-day data: {missing}")
+    requirements: dict[str, tuple[str, ...]] = {}
+    btc_days = btc_targets | {day - timedelta(days=1) for day in btc_targets}
+    requirements["BTCUSDT"] = tuple(day.isoformat() for day in sorted(btc_days))
+    for symbol in CRYPTO_SYMBOLS[1:]:
+        weekly_targets = set(
+            eligible_dates(
+                available.get(symbol, ()),
+                TEST_START,
+                TEST_END,
+                weekly=True,
+            )
+        )
+        weekly_days = weekly_targets | {
+            day - timedelta(days=1) for day in weekly_targets
+        }
+        requirements[symbol] = tuple(
+            day.isoformat() for day in sorted(weekly_days)
+        )
+    return requirements
 
 
 def research_cache_dir(config: P2Config) -> Path:
@@ -81,7 +135,12 @@ def ensure_bybit_cache(
     schedule: dict[str, Sequence[str]] | None = None,
 ) -> dict[str, int]:
     """Reconstruct missing daily streams and return cache counts."""
-    requirements = schedule or required_bybit_dates()
+    requirements = schedule or required_bybit_dates(
+        {
+            symbol: available_bybit_dates(source_root, symbol)
+            for symbol in CRYPTO_SYMBOLS
+        }
+    )
     destination = Path(cache_dir)
     required_count = 0
     cached_count = 0
