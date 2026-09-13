@@ -193,14 +193,17 @@ def render_research_figures(output_dir: str | Path) -> None:
     _save(fig, destination / "inventory_distribution.png")
 
     fig, axes = plt.subplots(1, 3, figsize=(10, 3.8))
+    aggregate_queue = queue_validation.copy()
+    if "date" in aggregate_queue and (aggregate_queue["date"] == "ALL").any():
+        aggregate_queue = aggregate_queue[aggregate_queue["date"] == "ALL"]
     metrics = (
         ("fill_count_relative_bias", "Fill-count bias"),
         ("fill_time_ks", "Fill-time KS"),
         ("gross_pnl_error", "Gross-PnL error"),
     )
     for axis, (column, title) in zip(axes, metrics, strict=True):
-        if not queue_validation.empty and column in queue_validation:
-            grouped = queue_validation.groupby("method")[column].mean().sort_index()
+        if not aggregate_queue.empty and column in aggregate_queue:
+            grouped = aggregate_queue.groupby("method")[column].mean().sort_index()
             axis.bar(grouped.index, grouped.values)
         axis.axhline(0.0, color="black", linewidth=0.8)
         axis.set_title(title)
