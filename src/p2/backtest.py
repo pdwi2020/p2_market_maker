@@ -38,7 +38,7 @@ def run_lobster_backtest(config: P2Config) -> BacktestResult:
     gamma = config.model.gamma
     sigma = config.model.sigma
     kappa = config.model.kappa
-    T = config.model.T
+    T = config.replay.session_duration_seconds
 
     if config.replay.use_calibrated_params:
         calibrated = calibrate_from_replay_files(orderbook_file, message_file)
@@ -53,7 +53,11 @@ def run_lobster_backtest(config: P2Config) -> BacktestResult:
             optimal_ask(mid_price, inventory, t, T, gamma, sigma, kappa),
         )
 
-    return replayer.run_strategy(strategy, use_queue_position=config.queue_model.enabled)
+    return replayer.run_strategy(
+        strategy,
+        use_queue_position=config.queue_model.enabled,
+        session_duration_seconds=T,
+    )
 
 
 def pnl_attribution(result: BacktestResult) -> dict[str, float]:

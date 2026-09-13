@@ -7,7 +7,13 @@ import json
 from pathlib import Path
 
 from p2.baselines import AvSOptimalMM, ConstantSpreadMM, InventoryLinearMM, RandomQuoter, SymmetricMM
-from p2.cross_symbol_sweep import DEFAULT_DATE, DEFAULT_T, LOBSTER_FREE_SAMPLE_URLS, run_symbol_sweep
+from p2.cross_symbol_sweep import (
+    DEFAULT_DATE,
+    DEFAULT_REPLAY_GAMMA,
+    DEFAULT_REPLAY_T,
+    LOBSTER_FREE_SAMPLE_URLS,
+    run_symbol_sweep,
+)
 from p2.hjb_solver import optimal_spread
 
 
@@ -24,8 +30,8 @@ def _default_quoters() -> dict[str, object]:
     def half_spread(calibration: dict[str, float | int | str]) -> float:
         return optimal_spread(
             t=0.0,
-            T=DEFAULT_T,
-            gamma=0.1,
+            T=DEFAULT_REPLAY_T,
+            gamma=DEFAULT_REPLAY_GAMMA,
             sigma=float(calibration["sigma"]),
             kappa=float(calibration["kappa"]),
         )
@@ -33,16 +39,16 @@ def _default_quoters() -> dict[str, object]:
     return {
         "avs_optimal": lambda calibration: AvSOptimalMM(
             sigma=float(calibration["sigma"]),
-            gamma=0.1,
+            gamma=DEFAULT_REPLAY_GAMMA,
             kappa=float(calibration["kappa"]),
-            T=DEFAULT_T,
+            T=DEFAULT_REPLAY_T,
         ),
         "symmetric": lambda calibration: SymmetricMM(half_spread=half_spread(calibration)),
         "constant_spread": lambda calibration: ConstantSpreadMM(
             sigma=float(calibration["sigma"]),
-            gamma=0.1,
+            gamma=DEFAULT_REPLAY_GAMMA,
             kappa=float(calibration["kappa"]),
-            T=DEFAULT_T,
+            T=DEFAULT_REPLAY_T,
         ),
         "inventory_linear": lambda calibration: InventoryLinearMM(
             half_spread=half_spread(calibration),

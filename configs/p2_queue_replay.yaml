@@ -7,10 +7,11 @@ paths:
 
 model:
   sigma: 1.0
-  gamma: 0.1
+  # At calibrated AAPL volatility, this skews about $0.0046 per share of inventory at the open.
+  gamma: 0.0001
   kappa: 1.5
   A: 140.0
-  T: 1.0
+  T: 23400.0
   dt: 0.001
   initial_mid: 100.0
 
@@ -38,6 +39,7 @@ replay:
   orderbook_file: data/lobster/AAPL_2012-06-21_34200000_57600000_orderbook_10.csv
   message_file: data/lobster/AAPL_2012-06-21_34200000_57600000_message_10.csv
   use_calibrated_params: true
+  session_duration_seconds: 23400.0
 
 queue_model:
   enabled: true

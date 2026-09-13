@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 
 
+DEFAULT_SESSION_DURATION_SECONDS = 23_400.0
+
+
 @dataclass(slots=True)
 class BacktestResult:
     pnl: float
@@ -92,14 +95,16 @@ class LOBSTERReplayer:
         strategy_fn: Callable[[float, int, float], tuple[float, float]],
         *,
         use_queue_position: bool = False,
+        session_duration_seconds: float = DEFAULT_SESSION_DURATION_SECONDS,
     ) -> BacktestResult:
         if use_queue_position:
-            return self._run_queue_aware_strategy(strategy_fn)
-        return self._run_instantaneous_strategy(strategy_fn)
+            return self._run_queue_aware_strategy(strategy_fn, session_duration_seconds)
+        return self._run_instantaneous_strategy(strategy_fn, session_duration_seconds)
 
     def _run_instantaneous_strategy(
         self,
         strategy_fn: Callable[[float, int, float], tuple[float, float]],
+        session_duration_seconds: float,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -107,6 +112,7 @@ class LOBSTERReplayer:
         mids = self.mid_price_series().to_numpy(dtype=float)
         prices = self.messages["price"].to_numpy(dtype=float) if "price" in self.messages else mids
         times = self.messages["time"].to_numpy(dtype=float) if "time" in self.messages else np.arange(len(mids), dtype=float)
+        strategy_times = _session_times(times, session_duration_seconds)
         event_type = self.messages["event_type"].to_numpy(dtype=int) if "event_type" in self.messages else np.full(len(mids), 4)
         direction = self.messages["direction"].to_numpy(dtype=int) if "direction" in self.messages else np.zeros(len(mids), dtype=int)
 
@@ -119,7 +125,7 @@ class LOBSTERReplayer:
 
         for idx in range(n_rows):
             mid = float(mids[idx])
-            t = float(times[idx])
+            t = float(strategy_times[idx])
             trade_price = float(prices[idx])
             bid, ask = strategy_fn(mid, int(inventory), t)
             bid = float(bid)
@@ -154,11 +160,13 @@ class LOBSTERReplayer:
     def _run_queue_aware_strategy(
         self,
         strategy_fn: Callable[[float, int, float], tuple[float, float]],
+        session_duration_seconds: float,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
 
         times = self.messages["time"].to_numpy(dtype=float) if "time" in self.messages else np.arange(len(self.orderbook), dtype=float)
+        strategy_times = _session_times(times, session_duration_seconds)
         prices = self.messages["price"].to_numpy(dtype=float) if "price" in self.messages else self.mid_price_series().to_numpy(dtype=float)
         sizes = self.messages["size"].to_numpy(dtype=float) if "size" in self.messages else np.ones(len(self.orderbook), dtype=float)
         event_type = self.messages["event_type"].to_numpy(dtype=int) if "event_type" in self.messages else np.full(len(self.orderbook), 4)
@@ -207,7 +215,7 @@ class LOBSTERReplayer:
 
         for idx in range(n_rows):
             mid = float(mids[idx])
-            t = float(times[idx])
+            t = float(strategy_times[idx])
             trade_price = float(prices[idx])
             event_size = max(int(round(float(sizes[idx]))), 0)
             bid, ask = strategy_fn(mid, int(inventory), t)
@@ -322,3 +330,12 @@ def _event_horizon(times: np.ndarray) -> float:
         return float(max(times.size, 1))
     horizon = float(times[-1] - times[0])
     return horizon if horizon > 0 else float(times.size)
+
+
+def _session_times(times: np.ndarray, session_duration_seconds: float) -> np.ndarray:
+    if session_duration_seconds <= 0.0:
+        raise ValueError("session_duration_seconds must be positive")
+    values = np.asarray(times, dtype=float)
+    if values.size == 0:
+        return values.copy()
+    return np.clip(values - values[0], 0.0, float(session_duration_seconds))

@@ -28,6 +28,8 @@ DEFAULT_LEVEL = 10
 DEFAULT_T = 1.0
 DEFAULT_DT = 0.001
 DEFAULT_GAMMA = 0.1
+DEFAULT_REPLAY_T = 23_400.0
+DEFAULT_REPLAY_GAMMA = 0.0001
 DEFAULT_Q_MAX = 10
 DEFAULT_N_PATHS = 1000
 
@@ -142,10 +144,11 @@ def _synthetic_metrics(
     seed: int,
 ) -> dict[str, float]:
     gamma = float(getattr(quoter, "gamma", DEFAULT_GAMMA))
-    horizon = float(getattr(quoter, "T", DEFAULT_T))
+    horizon = DEFAULT_T
     q_max = int(getattr(quoter, "Q_max", DEFAULT_Q_MAX))
+    synthetic_quoter = _with_horizon(quoter, horizon)
     result = _simulate_quotes(
-        quoter,
+        synthetic_quoter,
         n_paths=DEFAULT_N_PATHS,
         sigma=float(calibration["sigma"]),
         gamma=gamma,
@@ -166,6 +169,16 @@ def _synthetic_metrics(
         "fill_rate_bid": float(result.avg_bid_fill_rate),
         "fill_rate_ask": float(result.avg_ask_fill_rate),
     }
+
+
+def _with_horizon(quoter: Any, horizon: float) -> Any:
+    if not is_dataclass(quoter):
+        return quoter
+    kwargs = {field.name: getattr(quoter, field.name) for field in fields(quoter) if field.init}
+    if "T" not in kwargs:
+        return quoter
+    kwargs["T"] = horizon
+    return type(quoter)(**kwargs)
 
 
 def run_symbol_sweep(
@@ -199,7 +212,10 @@ def run_symbol_sweep(
 
         for quoter_idx, (quoter_name, quoter_spec) in enumerate(quoters.items()):
             quoter = _instantiate_quoter(quoter_spec, calibration)
-            replay_result = replayer.run_strategy(quoter.quotes)
+            replay_result = replayer.run_strategy(
+                quoter.quotes,
+                session_duration_seconds=DEFAULT_REPLAY_T,
+            )
             rows.append(
                 {
                     "symbol": symbol,

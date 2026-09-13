@@ -70,6 +70,7 @@ class ReplayConfig(BaseModel):
     orderbook_file: str | None = None
     message_file: str | None = None
     use_calibrated_params: bool = False
+    session_duration_seconds: float = Field(default=23_400.0, gt=0.0)
 
 
 class QueueModelConfig(BaseModel):
