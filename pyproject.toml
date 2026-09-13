@@ -9,8 +9,9 @@ description = "Avellaneda-Stoikov market maker research repo"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
+  "hftbacktest==2.4.4",
   "matplotlib>=3.8,<4",
-  "numpy>=1.26,<3",
+  "numpy>=1.26,<2.3",
   "pandas>=2.1,<4",
   "pyarrow>=14,<23",
   "pydantic>=2,<3",
