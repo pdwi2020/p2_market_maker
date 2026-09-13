@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -28,6 +29,7 @@ from p2.research_study import (
 
 
 CRYPTO_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+DEFAULT_WORKERS = min(4, os.cpu_count() or 1)
 
 
 @dataclass(frozen=True)
@@ -133,8 +135,12 @@ def ensure_bybit_cache(
     source_root: str | Path,
     cache_dir: str | Path,
     schedule: dict[str, Sequence[str]] | None = None,
+    *,
+    workers: int = DEFAULT_WORKERS,
 ) -> dict[str, int]:
     """Reconstruct missing daily streams and return cache counts."""
+    if workers < 1:
+        raise ValueError("workers must be positive")
     requirements = schedule or required_bybit_dates(
         {
             symbol: available_bybit_dates(source_root, symbol)
@@ -144,7 +150,7 @@ def ensure_bybit_cache(
     destination = Path(cache_dir)
     required_count = 0
     cached_count = 0
-    reconstructed_count = 0
+    jobs: list[tuple[Path, Path, Path, str, str]] = []
     for symbol in CRYPTO_SYMBOLS:
         for date_value in requirements.get(symbol, ()):
             required_count += 1
@@ -157,19 +163,38 @@ def ensure_bybit_cache(
                 symbol,
                 date_value,
             )
-            reconstruct_bybit_day(
-                orderbook_path,
-                trades_path,
-                destination,
-                symbol,
-                date_value,
+            jobs.append(
+                (
+                    orderbook_path,
+                    trades_path,
+                    destination,
+                    symbol,
+                    date_value,
+                )
             )
-            reconstructed_count += 1
+    if workers == 1:
+        for job in jobs:
+            _reconstruct_cache_job(job)
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            tuple(executor.map(_reconstruct_cache_job, jobs))
     return {
         "required_days": required_count,
         "cached_days": cached_count,
-        "reconstructed_days": reconstructed_count,
+        "reconstructed_days": len(jobs),
+        "workers": workers,
     }
+
+
+def _reconstruct_cache_job(job: tuple[Path, Path, Path, str, str]) -> None:
+    orderbook_path, trades_path, destination, symbol, date_value = job
+    reconstruct_bybit_day(
+        orderbook_path,
+        trades_path,
+        destination,
+        symbol,
+        date_value,
+    )
 
 
 def run_research(
@@ -195,6 +220,7 @@ def run_research(
     crypto = run_crypto_study(
         cache_dir,
         cancellation_rule=queue.selected_rule,
+        workers=DEFAULT_WORKERS,
     )
     crosscheck = run_hft_crosscheck(
         cache_dir,

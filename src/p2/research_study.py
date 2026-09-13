@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -204,8 +205,11 @@ def run_selection(
     *,
     cancellation_rule: CancellationRule,
     selection_dates: Sequence[date] | None = None,
+    workers: int = 1,
 ) -> SelectionResult:
     """Replay all candidates on the selection window and lock each family."""
+    if workers < 1:
+        raise ValueError("workers must be positive")
     if selection_dates is None:
         selection_dates = eligible_dates(
             available_cache_dates(cache_dir, "BTCUSDT"),
@@ -214,35 +218,51 @@ def run_selection(
         )
     if not selection_dates:
         raise ValueError("no eligible BTCUSDT selection dates are available")
+    tasks = [
+        (Path(cache_dir), cancellation_rule, trading_day)
+        for trading_day in selection_dates
+    ]
+    if workers == 1:
+        daily_rows = [_selection_day_rows(task) for task in tasks]
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            daily_rows = list(executor.map(_selection_day_rows, tasks))
+    rows = [row for day_rows in daily_rows for row in day_rows]
+    return select_strategies(pd.DataFrame(rows))
+
+
+def _selection_day_rows(
+    task: tuple[Path, CancellationRule, date],
+) -> list[dict[str, object]]:
+    cache_dir, cancellation_rule, trading_day = task
+    calibration_day = trading_day - timedelta(days=1)
+    calibration = calibrate_bybit_day(
+        _stream_path(cache_dir, "BTCUSDT", calibration_day)
+    )
+    events = load_bybit_events(_stream_path(cache_dir, "BTCUSDT", trading_day))
     settings = ReplaySettings(
         maker_fee_rate=PRIMARY_MAKER_FEE_RATE,
         latency_ms=PRIMARY_LATENCY_MS,
         cancellation_rule=cancellation_rule,
     )
     rows: list[dict[str, object]] = []
-    for trading_day in selection_dates:
-        calibration_day = trading_day - timedelta(days=1)
-        calibration = calibrate_bybit_day(
-            _stream_path(cache_dir, "BTCUSDT", calibration_day)
+    for spec in strategy_candidates():
+        result = replay_bybit_day(
+            events,
+            symbol="BTCUSDT",
+            date=trading_day.isoformat(),
+            strategy=spec,
+            calibration=calibration,
+            settings=settings,
         )
-        events = load_bybit_events(_stream_path(cache_dir, "BTCUSDT", trading_day))
-        for spec in strategy_candidates():
-            result = replay_bybit_day(
-                events,
-                symbol="BTCUSDT",
-                date=trading_day.isoformat(),
-                strategy=spec,
-                calibration=calibration,
-                settings=settings,
-            )
-            rows.append(
-                {
-                    "date": trading_day.isoformat(),
-                    "strategy": spec.name,
-                    "net_pnl": result.net_pnl,
-                }
-            )
-    return select_strategies(pd.DataFrame(rows))
+        rows.append(
+            {
+                "date": trading_day.isoformat(),
+                "strategy": spec.name,
+                "net_pnl": result.net_pnl,
+            }
+        )
+    return rows
 
 
 def replay_result_rows(
@@ -366,13 +386,17 @@ def run_crypto_study(
     selection_dates: Sequence[date] | None = None,
     test_dates: dict[str, Sequence[date]] | None = None,
     bootstrap_resamples: int = 10_000,
+    workers: int = 1,
 ) -> CryptoStudyResult:
     """Run selection and all Study A primary and sensitivity cells."""
+    if workers < 1:
+        raise ValueError("workers must be positive")
     started = perf_counter()
     selection = run_selection(
         cache_dir,
         cancellation_rule=cancellation_rule,
         selection_dates=selection_dates,
+        workers=workers,
     )
     if test_dates is None:
         test_dates = {
@@ -384,39 +408,25 @@ def run_crypto_study(
             )
             for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT")
         }
-    daily_rows: list[dict[str, object]] = []
-    decomposition_rows: list[dict[str, object]] = []
-    markout_rows: list[dict[str, object]] = []
-    for symbol, dates in test_dates.items():
-        for trading_day in dates:
-            calibration_day = trading_day - timedelta(days=1)
-            calibration = calibrate_bybit_day(
-                _stream_path(cache_dir, symbol, calibration_day)
-            )
-            events = load_bybit_events(_stream_path(cache_dir, symbol, trading_day))
-            for spec in selection.strategies:
-                for latency_ms in LATENCIES_MS:
-                    settings = ReplaySettings(
-                        maker_fee_rate=0.0,
-                        latency_ms=latency_ms,
-                        cancellation_rule=cancellation_rule,
-                    )
-                    result = replay_bybit_day(
-                        events,
-                        symbol=symbol,
-                        date=trading_day.isoformat(),
-                        strategy=spec,
-                        calibration=calibration,
-                        settings=settings,
-                    )
-                    daily, decomposition, markouts = replay_result_rows(
-                        result,
-                        calibration_date=calibration_day.isoformat(),
-                        settings=settings,
-                    )
-                    daily_rows.extend(daily)
-                    decomposition_rows.extend(decomposition)
-                    markout_rows.extend(markouts)
+    tasks = [
+        (
+            Path(cache_dir),
+            symbol,
+            trading_day,
+            selection.strategies,
+            cancellation_rule,
+        )
+        for symbol, dates in test_dates.items()
+        for trading_day in dates
+    ]
+    if workers == 1:
+        result_rows = [_test_day_rows(task) for task in tasks]
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            result_rows = list(executor.map(_test_day_rows, tasks))
+    daily_rows = [row for result in result_rows for row in result[0]]
+    decomposition_rows = [row for result in result_rows for row in result[1]]
+    markout_rows = [row for result in result_rows for row in result[2]]
     daily_pnl = pd.DataFrame(daily_rows, columns=DAILY_COLUMNS)
     decomposition = pd.DataFrame(decomposition_rows, columns=DECOMPOSITION_COLUMNS)
     markouts = pd.DataFrame(markout_rows, columns=MARKOUT_COLUMNS)
@@ -447,3 +457,51 @@ def run_crypto_study(
         markouts=markouts,
         selection=selection,
     )
+
+
+def _test_day_rows(
+    task: tuple[
+        Path,
+        str,
+        date,
+        tuple[StrategySpec, ...],
+        CancellationRule,
+    ],
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    cache_dir, symbol, trading_day, strategies, cancellation_rule = task
+    calibration_day = trading_day - timedelta(days=1)
+    calibration = calibrate_bybit_day(
+        _stream_path(cache_dir, symbol, calibration_day)
+    )
+    events = load_bybit_events(_stream_path(cache_dir, symbol, trading_day))
+    daily_rows: list[dict[str, object]] = []
+    decomposition_rows: list[dict[str, object]] = []
+    markout_rows: list[dict[str, object]] = []
+    for spec in strategies:
+        for latency_ms in LATENCIES_MS:
+            settings = ReplaySettings(
+                maker_fee_rate=0.0,
+                latency_ms=latency_ms,
+                cancellation_rule=cancellation_rule,
+            )
+            result = replay_bybit_day(
+                events,
+                symbol=symbol,
+                date=trading_day.isoformat(),
+                strategy=spec,
+                calibration=calibration,
+                settings=settings,
+            )
+            daily, decomposition, markouts = replay_result_rows(
+                result,
+                calibration_date=calibration_day.isoformat(),
+                settings=settings,
+            )
+            daily_rows.extend(daily)
+            decomposition_rows.extend(decomposition)
+            markout_rows.extend(markouts)
+    return daily_rows, decomposition_rows, markout_rows

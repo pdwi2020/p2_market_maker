@@ -90,12 +90,18 @@ def test_cache_reconstruction_skips_existing_days(
     monkeypatch.setattr(research, "find_bybit_files", fake_find)
     monkeypatch.setattr(research, "reconstruct_bybit_day", fake_reconstruct)
 
-    summary = research.ensure_bybit_cache(tmp_path, cache_dir, schedule)
+    summary = research.ensure_bybit_cache(
+        tmp_path,
+        cache_dir,
+        schedule,
+        workers=1,
+    )
 
     assert summary == {
         "required_days": 3,
         "cached_days": 1,
         "reconstructed_days": 2,
+        "workers": 1,
     }
     assert calls == [("ETHUSDT", "2025-07-01"), ("SOLUSDT", "2025-07-01")]
 
@@ -124,6 +130,7 @@ def test_research_runner_publishes_every_study(
             "required_days": 1,
             "cached_days": 1,
             "reconstructed_days": 0,
+            "workers": 1,
         },
     )
     monkeypatch.setattr(research, "find_mbo_file", lambda root, symbol: Path("es"))
@@ -135,7 +142,7 @@ def test_research_runner_publishes_every_study(
     monkeypatch.setattr(
         research,
         "run_crypto_study",
-        lambda cache, cancellation_rule: SimpleNamespace(
+        lambda cache, cancellation_rule, workers: SimpleNamespace(
             summary={"main_study": []},
             daily_pnl=daily,
             decomposition=decomposition,
