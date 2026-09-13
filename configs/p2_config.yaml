@@ -40,6 +40,7 @@ replay:
   message_file: data/lobster/AAPL_2012-06-21_34200000_57600000_message_10.csv
   use_calibrated_params: true
   session_duration_seconds: 23400.0
+  post_only_mode: reprice
 
 queue_model:
   enabled: false

@@ -57,6 +57,7 @@ def run_lobster_backtest(config: P2Config) -> BacktestResult:
         strategy,
         use_queue_position=config.queue_model.enabled,
         session_duration_seconds=T,
+        post_only_mode=config.replay.post_only_mode,
     )
 
 

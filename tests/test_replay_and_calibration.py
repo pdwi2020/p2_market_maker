@@ -124,3 +124,47 @@ def test_execution_direction_uses_resting_order_side(tmp_path: Path, use_queue_p
     assert result.inventory_path[2] == 1
     assert result.inventory_path[4] == 0
     assert result.inventory_path[-1] == 0
+
+
+@pytest.mark.parametrize(
+    ("post_only_mode", "expected_fills"),
+    [("reprice", 1), ("reject", 0)],
+)
+def test_post_only_quotes_are_repriced_or_rejected(
+    tmp_path: Path,
+    post_only_mode: str,
+    expected_fills: int,
+) -> None:
+    orderbook_file = tmp_path / "post_only_orderbook.csv"
+    message_file = tmp_path / "post_only_message.csv"
+    orderbook_file.write_text("\n".join(["1010000,1,990000,1"] * 2))
+    message_file.write_text(
+        "\n".join(
+            [
+                "34200.000,1,1,1,1000000,1",
+                "34200.001,4,2,1,990000,1",
+            ]
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+
+    result = replayer.run_strategy(
+        lambda mid, inventory, t: (102.0, 103.0),
+        post_only_mode=post_only_mode,
+    )
+
+    assert len(result.fill_times) == expected_fills
+    assert result.marketable_fill_count == 0
+
+
+def test_aapl_replay_has_no_marketable_fills() -> None:
+    data_dir = Path(__file__).resolve().parents[1] / "data" / "lobster"
+    orderbook_file = data_dir / "AAPL_2012-06-21_34200000_57600000_orderbook_10.csv"
+    message_file = data_dir / "AAPL_2012-06-21_34200000_57600000_message_10.csv"
+    if not orderbook_file.exists() or not message_file.exists():
+        pytest.skip("local AAPL LOBSTER sample is unavailable")
+    config = load_config(Path(__file__).resolve().parents[1] / "configs" / "p2_config.yaml")
+
+    result = run_lobster_backtest(config)
+
+    assert result.marketable_fill_count == 0

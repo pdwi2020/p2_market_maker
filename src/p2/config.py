@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -71,6 +71,7 @@ class ReplayConfig(BaseModel):
     message_file: str | None = None
     use_calibrated_params: bool = False
     session_duration_seconds: float = Field(default=23_400.0, gt=0.0)
+    post_only_mode: Literal["reprice", "reject"] = "reprice"
 
 
 class QueueModelConfig(BaseModel):

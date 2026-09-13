@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -24,6 +24,7 @@ class BacktestResult:
     time_to_fill_mean: float = 0.0
     time_to_fill_p50: float = 0.0
     time_to_fill_p90: float = 0.0
+    marketable_fill_count: int = 0
 
 
 @dataclass(slots=True)
@@ -96,20 +97,26 @@ class LOBSTERReplayer:
         *,
         use_queue_position: bool = False,
         session_duration_seconds: float = DEFAULT_SESSION_DURATION_SECONDS,
+        post_only_mode: Literal["reprice", "reject"] = "reprice",
     ) -> BacktestResult:
         if use_queue_position:
-            return self._run_queue_aware_strategy(strategy_fn, session_duration_seconds)
-        return self._run_instantaneous_strategy(strategy_fn, session_duration_seconds)
+            return self._run_queue_aware_strategy(strategy_fn, session_duration_seconds, post_only_mode)
+        return self._run_instantaneous_strategy(strategy_fn, session_duration_seconds, post_only_mode)
 
     def _run_instantaneous_strategy(
         self,
         strategy_fn: Callable[[float, int, float], tuple[float, float]],
         session_duration_seconds: float,
+        post_only_mode: Literal["reprice", "reject"],
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
 
-        mids = self.mid_price_series().to_numpy(dtype=float)
+        bid_price_post = self.orderbook["bid_price_1"].to_numpy(dtype=float)
+        ask_price_post = self.orderbook["ask_price_1"].to_numpy(dtype=float)
+        bid_price_pre = np.concatenate(([bid_price_post[0]], bid_price_post[:-1]))
+        ask_price_pre = np.concatenate(([ask_price_post[0]], ask_price_post[:-1]))
+        mids = 0.5 * (bid_price_pre + ask_price_pre)
         prices = self.messages["price"].to_numpy(dtype=float) if "price" in self.messages else mids
         times = self.messages["time"].to_numpy(dtype=float) if "time" in self.messages else np.arange(len(mids), dtype=float)
         strategy_times = _session_times(times, session_duration_seconds)
@@ -128,23 +135,30 @@ class LOBSTERReplayer:
             t = float(strategy_times[idx])
             trade_price = float(prices[idx])
             bid, ask = strategy_fn(mid, int(inventory), t)
-            bid = float(bid)
-            ask = float(ask)
+            bid, ask = _apply_post_only(
+                float(bid),
+                float(ask),
+                best_bid=float(bid_price_pre[idx]),
+                best_ask=float(ask_price_pre[idx]),
+                mode=post_only_mode,
+            )
 
             if int(event_type[idx]) not in {4, 5}:
                 inventory_path[idx + 1] = inventory
                 continue
 
-            if int(direction[idx]) > 0 and bid >= trade_price:
+            if int(direction[idx]) > 0 and bid is not None and bid >= trade_price:
                 cash -= bid
                 inventory += 1
                 fill_times.append(t)
-                spreads.append(ask - bid)
-            elif int(direction[idx]) < 0 and ask <= trade_price:
+                if ask is not None:
+                    spreads.append(ask - bid)
+            elif int(direction[idx]) < 0 and ask is not None and ask <= trade_price:
                 cash += ask
                 inventory -= 1
                 fill_times.append(t)
-                spreads.append(ask - bid)
+                if bid is not None:
+                    spreads.append(ask - bid)
 
             inventory_path[idx + 1] = inventory
 
@@ -161,6 +175,7 @@ class LOBSTERReplayer:
         self,
         strategy_fn: Callable[[float, int, float], tuple[float, float]],
         session_duration_seconds: float,
+        post_only_mode: Literal["reprice", "reject"],
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -219,10 +234,15 @@ class LOBSTERReplayer:
             trade_price = float(prices[idx])
             event_size = max(int(round(float(sizes[idx]))), 0)
             bid, ask = strategy_fn(mid, int(inventory), t)
-            bid = float(bid)
-            ask = float(ask)
             best_bid = float(bid_price_pre[idx])
             best_ask = float(ask_price_pre[idx])
+            bid, ask = _apply_post_only(
+                float(bid),
+                float(ask),
+                best_bid=best_bid,
+                best_ask=best_ask,
+                mode=post_only_mode,
+            )
             best_bid_size = int(max(bid_size_pre[idx], 0))
             best_ask_size = int(max(ask_size_pre[idx], 0))
 
@@ -248,10 +268,11 @@ class LOBSTERReplayer:
             if current_event in {4, 5} and event_size > 0:
                 if current_direction > 0 and bid_order.position is not None and bid_order.price is not None and bid_order.price >= trade_price:
                     if event_size > bid_order.position:
-                        cash -= bid
+                        cash -= float(bid_order.price)
                         inventory += 1
                         fill_times.append(t)
-                        spreads.append(ask - bid)
+                        if ask is not None and bid is not None:
+                            spreads.append(ask - bid)
                         positions_at_fill.append(bid_order.position)
                         if bid_order.placed_at is not None:
                             time_to_fill.append(max(t - bid_order.placed_at, 0.0))
@@ -260,10 +281,11 @@ class LOBSTERReplayer:
                         bid_order.position = max(bid_order.position - event_size, 0)
                 elif current_direction < 0 and ask_order.position is not None and ask_order.price is not None and ask_order.price <= trade_price:
                     if event_size > ask_order.position:
-                        cash += ask
+                        cash += float(ask_order.price)
                         inventory -= 1
                         fill_times.append(t)
-                        spreads.append(ask - bid)
+                        if ask is not None and bid is not None:
+                            spreads.append(ask - bid)
                         positions_at_fill.append(ask_order.position)
                         if ask_order.placed_at is not None:
                             time_to_fill.append(max(t - ask_order.placed_at, 0.0))
@@ -302,12 +324,14 @@ class LOBSTERReplayer:
 def _refresh_order_state(
     *,
     order: _RestingOrder,
-    quote: float,
+    quote: float | None,
     best_price: float,
     best_size: int,
     side: str,
     placed_at: float,
 ) -> _RestingOrder:
+    if quote is None:
+        return _RestingOrder()
     quote_level = round(float(quote), 2)
     best_level = round(float(best_price), 2)
 
@@ -339,3 +363,20 @@ def _session_times(times: np.ndarray, session_duration_seconds: float) -> np.nda
     if values.size == 0:
         return values.copy()
     return np.clip(values - values[0], 0.0, float(session_duration_seconds))
+
+
+def _apply_post_only(
+    bid: float,
+    ask: float,
+    *,
+    best_bid: float,
+    best_ask: float,
+    mode: Literal["reprice", "reject"],
+) -> tuple[float | None, float | None]:
+    if mode not in {"reprice", "reject"}:
+        raise ValueError(f"Unsupported post-only mode: {mode}")
+    if bid >= best_ask:
+        bid = best_bid if mode == "reprice" else None
+    if ask <= best_bid:
+        ask = best_ask if mode == "reprice" else None
+    return bid, ask

@@ -39,6 +39,7 @@ replay:
   message_file:
   use_calibrated_params: false
   session_duration_seconds: 23400.0
+  post_only_mode: reprice
 
 queue_model:
   enabled: false
