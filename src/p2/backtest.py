@@ -61,7 +61,7 @@ def run_lobster_backtest(config: P2Config) -> BacktestResult:
         order_size=config.queue_model.order_size,
         cancellation_rule=config.queue_model.cancellation_rule,
         latency_ms=config.replay.latency_ms,
-        inventory_limit=config.inventory.Q_max,
+        inventory_limit=config.inventory.Q_max if config.inventory.enabled else None,
         maker_rebate_per_share=config.replay.maker_rebate_per_share,
         taker_fee_per_share=config.replay.taker_fee_per_share,
     )

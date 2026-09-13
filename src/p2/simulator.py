@@ -7,10 +7,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from rich.console import Console
 
-from p2.baselines import ConstantSpreadMM, SymmetricMM, compare_strategies
+from p2.baselines import ConstantSpreadMM, SymmetricAS, SymmetricMM, compare_strategies
 from p2.config import (
     AdverseSelectionConfig,
     InventoryConfig,
@@ -169,6 +170,43 @@ def run_default_experiment(config: P2Config) -> tuple[SimResult, pd.DataFrame]:
         n_paths=config.simulation.n_paths,
     )
     return avs_result, baseline_comparison
+
+
+def run_as_2008_replication(config: P2Config) -> pd.DataFrame:
+    rows: list[dict[str, float | str]] = []
+    for gamma in config.sweep.gamma_grid:
+        model = config.model.model_copy(update={"gamma": float(gamma)})
+        strategies = {
+            "inventory": AvellanedaStoikovStrategy(model),
+            "symmetric": SymmetricAS(
+                sigma=model.sigma,
+                gamma=model.gamma,
+                kappa=model.kappa,
+                T=model.T,
+            ),
+        }
+        for strategy_name, strategy in strategies.items():
+            result = simulate_strategy(
+                strategy,
+                model=model,
+                inventory_cfg=config.inventory,
+                adverse_selection_cfg=config.adverse_selection,
+                n_paths=config.simulation.n_paths,
+                seed=config.simulation.seed,
+                use_queue_position=False,
+            )
+            terminal_inventory = np.asarray(result.terminal_inventory, dtype=float)
+            rows.append(
+                {
+                    "gamma": float(gamma),
+                    "strategy": strategy_name,
+                    "mean_profit": float(result.mean_pnl),
+                    "std_profit": float(result.std_pnl),
+                    "mean_final_inventory": float(np.mean(terminal_inventory)),
+                    "std_final_inventory": float(np.std(terminal_inventory, ddof=1)),
+                }
+            )
+    return pd.DataFrame(rows).sort_values(["gamma", "strategy"]).reset_index(drop=True)
 
 
 def write_simulation_outputs(config: P2Config, result: SimResult, baseline_comparison: pd.DataFrame) -> Path:

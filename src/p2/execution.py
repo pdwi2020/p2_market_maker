@@ -151,8 +151,12 @@ def _simulate_strategy_instantaneous(
         bid_quotes[:, step] = bid_t
         ask_quotes[:, step] = ask_t
 
-        bid_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=1), dtype=bool)
-        ask_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=-1), dtype=bool)
+        if inventory_cfg.enabled:
+            bid_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=1), dtype=bool)
+            ask_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=-1), dtype=bool)
+        else:
+            bid_blocked = np.zeros(n_paths, dtype=bool)
+            ask_blocked = np.zeros(n_paths, dtype=bool)
 
         delta_bid = np.where(bid_blocked, np.inf, np.maximum(mid_t - bid_t, 0.0))
         delta_ask = np.where(ask_blocked, np.inf, np.maximum(ask_t - mid_t, 0.0))
@@ -251,8 +255,12 @@ def _simulate_strategy_queue_aware(
         bid_quotes[:, step] = bid_t
         ask_quotes[:, step] = ask_t
 
-        bid_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=1), dtype=bool)
-        ask_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=-1), dtype=bool)
+        if inventory_cfg.enabled:
+            bid_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=1), dtype=bool)
+            ask_blocked = np.asarray(hard_limit_active(inventory_t, inventory_cfg.Q_max, direction=-1), dtype=bool)
+        else:
+            bid_blocked = np.zeros(n_paths, dtype=bool)
+            ask_blocked = np.zeros(n_paths, dtype=bool)
 
         delta_bid = np.where(bid_blocked, np.inf, np.maximum(mid_t - bid_t, 0.0))
         delta_ask = np.where(ask_blocked, np.inf, np.maximum(ask_t - mid_t, 0.0))

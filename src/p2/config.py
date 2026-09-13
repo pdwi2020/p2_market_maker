@@ -35,6 +35,7 @@ class ModelConfig(BaseModel):
 class InventoryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    enabled: bool = True
     Q_max: int = Field(default=10, ge=1)
 
 

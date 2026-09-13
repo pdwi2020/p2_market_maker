@@ -16,6 +16,7 @@ model:
   initial_mid: 100.0
 
 inventory:
+  enabled: true
   Q_max: 10
 
 adverse_selection:

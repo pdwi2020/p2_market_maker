@@ -33,6 +33,30 @@ class SymmetricMM:
 
 
 @dataclass(slots=True)
+class SymmetricAS:
+    sigma: float
+    gamma: float
+    kappa: float
+    T: float
+    name: str = "symmetric"
+
+    def quotes(
+        self,
+        S: float | np.ndarray,
+        q: float | np.ndarray,
+        t: float,
+    ) -> tuple[float | np.ndarray, float | np.ndarray]:
+        del q
+        s_arr = np.asarray(S, dtype=float)
+        half_spread = optimal_spread(t=t, T=self.T, gamma=self.gamma, sigma=self.sigma, kappa=self.kappa)
+        bid = s_arr - half_spread
+        ask = s_arr + half_spread
+        if bid.ndim == 0:
+            return float(bid.item()), float(ask.item())
+        return bid, ask
+
+
+@dataclass(slots=True)
 class ConstantSpreadMM:
     sigma: float
     gamma: float
