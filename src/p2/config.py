@@ -78,6 +78,8 @@ class QueueModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    order_size: int = Field(default=1, ge=1)
+    cancellation_rule: Literal["cancel-from-back", "proportional"] = "proportional"
     arrival_rate_depth_coeff: float = Field(default=0.05, ge=0.0)
     cancel_rate_depth_coeff: float = Field(default=0.02, ge=0.0)
     fill_intensity_depth_coeff: float = Field(default=0.01, ge=0.0)

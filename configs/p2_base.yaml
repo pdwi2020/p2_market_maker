@@ -43,6 +43,8 @@ replay:
 
 queue_model:
   enabled: false
+  order_size: 1
+  cancellation_rule: proportional
   arrival_rate_depth_coeff: 0.05
   cancel_rate_depth_coeff: 0.02
   fill_intensity_depth_coeff: 0.01

@@ -1,10 +1,12 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from p2.config import AdverseSelectionConfig, InventoryConfig, ModelConfig
 from p2.execution import simulate_strategy
+from p2.lobster_replay import LOBSTERReplayer
 from p2.queue import (
     QueueReactiveModel,
     QueueState,
@@ -143,3 +145,94 @@ def test_backward_compat() -> None:
     assert np.array_equal(explicit_disabled.inventory_paths, baseline.inventory_paths)
     assert np.array_equal(explicit_disabled.bid_fill_paths, baseline.bid_fill_paths)
     assert np.array_equal(explicit_disabled.ask_fill_paths, baseline.ask_fill_paths)
+
+
+@pytest.mark.parametrize(
+    ("cancellation_rule", "expected_inventory"),
+    [("cancel-from-back", 1), ("proportional", 0)],
+)
+def test_replay_queue_cancellation_rule(
+    tmp_path: Path,
+    cancellation_rule: str,
+    expected_inventory: int,
+) -> None:
+    orderbook_file = tmp_path / "queue_cancel_orderbook.csv"
+    message_file = tmp_path / "queue_cancel_message.csv"
+    orderbook_file.write_text(
+        "\n".join(
+            [
+                "1010000,5,990000,10",
+                "1010000,5,990000,12",
+                "1010000,5,990000,8",
+                "1010000,5,990000,5",
+            ]
+        )
+    )
+    message_file.write_text(
+        "\n".join(
+            [
+                "34200.0,1,1,1,1000000,1",
+                "34200.1,4,2,4,990000,1",
+                "34200.2,2,3,4,990000,1",
+                "34200.3,4,4,3,990000,1",
+            ]
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+
+    result = replayer.run_strategy(
+        lambda mid, inventory, t: (99.0, 103.0),
+        use_queue_position=True,
+        cancellation_rule=cancellation_rule,
+    )
+
+    assert result.inventory_path[-1] == expected_inventory
+
+
+def test_replay_queue_supports_partial_fills(tmp_path: Path) -> None:
+    orderbook_file = tmp_path / "partial_orderbook.csv"
+    message_file = tmp_path / "partial_message.csv"
+    orderbook_file.write_text("\n".join(["1010000,5,990000,2"] * 4))
+    message_file.write_text(
+        "\n".join(
+            [
+                "34200.0,1,1,1,1000000,1",
+                "34200.1,4,2,3,990000,1",
+                "34200.2,4,3,1,990000,1",
+                "34200.3,4,4,2,990000,1",
+            ]
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+
+    result = replayer.run_strategy(
+        lambda mid, inventory, t: (99.0, 103.0),
+        use_queue_position=True,
+        order_size=3,
+    )
+
+    assert result.inventory_path.tolist() == [0, 0, 1, 2, 3]
+    assert len(result.fill_times) == 3
+
+
+def test_repricing_loses_queue_priority(tmp_path: Path) -> None:
+    orderbook_file = tmp_path / "reprice_orderbook.csv"
+    message_file = tmp_path / "reprice_message.csv"
+    orderbook_file.write_text("\n".join(["1010000,5,990000,5,1020000,5,980000,7"] * 3))
+    message_file.write_text(
+        "\n".join(
+            [
+                "34200.0,1,1,1,1000000,1",
+                "34200.1,1,2,1,1000000,1",
+                "34200.2,4,3,6,980000,1",
+            ]
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+
+    result = replayer.run_strategy(
+        lambda mid, inventory, t: (99.0 if t < 0.05 else 98.0, 103.0),
+        use_queue_position=True,
+    )
+
+    assert len(result.fill_times) == 0

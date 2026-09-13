@@ -31,6 +31,7 @@ class BacktestResult:
 class _RestingOrder:
     price: float | None = None
     position: int | None = None
+    remaining_size: int = 0
     placed_at: float | None = None
 
 
@@ -61,9 +62,18 @@ class LOBSTERReplayer:
 
     @staticmethod
     def _label_orderbook(frame: pd.DataFrame) -> pd.DataFrame:
-        names = ["ask_price_1", "ask_size_1", "bid_price_1", "bid_size_1"]
-        if frame.shape[1] > 4:
-            names.extend([f"col_{idx}" for idx in range(4, frame.shape[1])])
+        names: list[str] = []
+        for level in range(1, frame.shape[1] // 4 + 1):
+            names.extend(
+                [
+                    f"ask_price_{level}",
+                    f"ask_size_{level}",
+                    f"bid_price_{level}",
+                    f"bid_size_{level}",
+                ]
+            )
+        if len(names) < frame.shape[1]:
+            names.extend([f"col_{idx}" for idx in range(len(names), frame.shape[1])])
         labeled = frame.copy()
         labeled.columns = names[: frame.shape[1]]
         return labeled
@@ -98,9 +108,17 @@ class LOBSTERReplayer:
         use_queue_position: bool = False,
         session_duration_seconds: float = DEFAULT_SESSION_DURATION_SECONDS,
         post_only_mode: Literal["reprice", "reject"] = "reprice",
+        order_size: int = 1,
+        cancellation_rule: Literal["cancel-from-back", "proportional"] = "proportional",
     ) -> BacktestResult:
         if use_queue_position:
-            return self._run_queue_aware_strategy(strategy_fn, session_duration_seconds, post_only_mode)
+            return self._run_queue_aware_strategy(
+                strategy_fn,
+                session_duration_seconds,
+                post_only_mode,
+                order_size,
+                cancellation_rule,
+            )
         return self._run_instantaneous_strategy(strategy_fn, session_duration_seconds, post_only_mode)
 
     def _run_instantaneous_strategy(
@@ -176,6 +194,8 @@ class LOBSTERReplayer:
         strategy_fn: Callable[[float, int, float], tuple[float, float]],
         session_duration_seconds: float,
         post_only_mode: Literal["reprice", "reject"],
+        order_size: int,
+        cancellation_rule: Literal["cancel-from-back", "proportional"],
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -187,10 +207,13 @@ class LOBSTERReplayer:
         event_type = self.messages["event_type"].to_numpy(dtype=int) if "event_type" in self.messages else np.full(len(self.orderbook), 4)
         direction = self.messages["direction"].to_numpy(dtype=int) if "direction" in self.messages else np.zeros(len(self.orderbook), dtype=int)
 
-        bid_price_post = self.orderbook["bid_price_1"].to_numpy(dtype=float)
-        ask_price_post = self.orderbook["ask_price_1"].to_numpy(dtype=float)
-        bid_size_post = self.orderbook["bid_size_1"].to_numpy(dtype=int)
-        ask_size_post = self.orderbook["ask_size_1"].to_numpy(dtype=int)
+        if order_size < 1:
+            raise ValueError("order_size must be positive")
+        if cancellation_rule not in {"cancel-from-back", "proportional"}:
+            raise ValueError(f"Unsupported cancellation rule: {cancellation_rule}")
+
+        bid_price_post, bid_size_post = _side_levels(self.orderbook, "bid")
+        ask_price_post, ask_size_post = _side_levels(self.orderbook, "ask")
 
         n_rows = min(
             len(times),
@@ -198,10 +221,10 @@ class LOBSTERReplayer:
             len(sizes),
             len(event_type),
             len(direction),
-            len(bid_price_post),
-            len(ask_price_post),
-            len(bid_size_post),
-            len(ask_size_post),
+            bid_price_post.shape[0],
+            ask_price_post.shape[0],
+            bid_size_post.shape[0],
+            ask_size_post.shape[0],
         )
         if n_rows == 0:
             return BacktestResult(
@@ -211,11 +234,11 @@ class LOBSTERReplayer:
                 spread_realized=0.0,
             )
 
-        bid_price_pre = np.concatenate(([bid_price_post[0]], bid_price_post[: n_rows - 1]))
-        ask_price_pre = np.concatenate(([ask_price_post[0]], ask_price_post[: n_rows - 1]))
-        bid_size_pre = np.concatenate(([bid_size_post[0]], bid_size_post[: n_rows - 1]))
-        ask_size_pre = np.concatenate(([ask_size_post[0]], ask_size_post[: n_rows - 1]))
-        mids = 0.5 * (bid_price_pre + ask_price_pre)
+        bid_price_pre = _pre_event_levels(bid_price_post[:n_rows])
+        ask_price_pre = _pre_event_levels(ask_price_post[:n_rows])
+        bid_size_pre = _pre_event_levels(bid_size_post[:n_rows])
+        ask_size_pre = _pre_event_levels(ask_size_post[:n_rows])
+        mids = 0.5 * (bid_price_pre[:, 0] + ask_price_pre[:, 0])
 
         inventory = 0
         cash = 0.0
@@ -234,8 +257,8 @@ class LOBSTERReplayer:
             trade_price = float(prices[idx])
             event_size = max(int(round(float(sizes[idx]))), 0)
             bid, ask = strategy_fn(mid, int(inventory), t)
-            best_bid = float(bid_price_pre[idx])
-            best_ask = float(ask_price_pre[idx])
+            best_bid = float(bid_price_pre[idx, 0])
+            best_ask = float(ask_price_pre[idx, 0])
             bid, ask = _apply_post_only(
                 float(bid),
                 float(ask),
@@ -243,64 +266,85 @@ class LOBSTERReplayer:
                 best_ask=best_ask,
                 mode=post_only_mode,
             )
-            best_bid_size = int(max(bid_size_pre[idx], 0))
-            best_ask_size = int(max(ask_size_pre[idx], 0))
-
             bid_order = _refresh_order_state(
                 order=bid_order,
                 quote=bid,
                 best_price=best_bid,
-                best_size=best_bid_size,
+                level_prices=bid_price_pre[idx],
+                level_sizes=bid_size_pre[idx],
                 side="bid",
                 placed_at=t,
+                order_size=order_size,
             )
             ask_order = _refresh_order_state(
                 order=ask_order,
                 quote=ask,
                 best_price=best_ask,
-                best_size=best_ask_size,
+                level_prices=ask_price_pre[idx],
+                level_sizes=ask_size_pre[idx],
                 side="ask",
                 placed_at=t,
+                order_size=order_size,
             )
 
             current_event = int(event_type[idx])
             current_direction = int(direction[idx])
             if current_event in {4, 5} and event_size > 0:
-                if current_direction > 0 and bid_order.position is not None and bid_order.price is not None and bid_order.price >= trade_price:
-                    if event_size > bid_order.position:
-                        cash -= float(bid_order.price)
-                        inventory += 1
+                if current_direction > 0 and _event_matches_order(bid_order, trade_price):
+                    position_before = int(bid_order.position or 0)
+                    fill_size = _execute_against_order(bid_order, event_size)
+                    if fill_size > 0:
+                        cash -= float(bid_order.price) * fill_size
+                        inventory += fill_size
                         fill_times.append(t)
                         if ask is not None and bid is not None:
                             spreads.append(ask - bid)
-                        positions_at_fill.append(bid_order.position)
+                        positions_at_fill.append(position_before)
                         if bid_order.placed_at is not None:
                             time_to_fill.append(max(t - bid_order.placed_at, 0.0))
+                    if bid_order.remaining_size == 0:
                         bid_order = _RestingOrder()
-                    else:
-                        bid_order.position = max(bid_order.position - event_size, 0)
-                elif current_direction < 0 and ask_order.position is not None and ask_order.price is not None and ask_order.price <= trade_price:
-                    if event_size > ask_order.position:
-                        cash += float(ask_order.price)
-                        inventory -= 1
+                elif current_direction < 0 and _event_matches_order(ask_order, trade_price):
+                    position_before = int(ask_order.position or 0)
+                    fill_size = _execute_against_order(ask_order, event_size)
+                    if fill_size > 0:
+                        cash += float(ask_order.price) * fill_size
+                        inventory -= fill_size
                         fill_times.append(t)
                         if ask is not None and bid is not None:
                             spreads.append(ask - bid)
-                        positions_at_fill.append(ask_order.position)
+                        positions_at_fill.append(position_before)
                         if ask_order.placed_at is not None:
                             time_to_fill.append(max(t - ask_order.placed_at, 0.0))
+                    if ask_order.remaining_size == 0:
                         ask_order = _RestingOrder()
-                    else:
-                        ask_order.position = max(ask_order.position - event_size, 0)
             elif current_event in {2, 3} and event_size > 0:
-                if current_direction > 0 and np.isclose(trade_price, best_bid):
+                if current_direction > 0:
                     cancel_volume += event_size
-                    if bid_order.position is not None and bid_order.price is not None and np.isclose(bid_order.price, best_bid):
-                        bid_order.position = max(bid_order.position - event_size, 0)
-                elif current_direction < 0 and np.isclose(trade_price, best_ask):
+                    if _event_matches_order(bid_order, trade_price):
+                        _cancel_ahead(
+                            bid_order,
+                            event_size,
+                            level_size=_displayed_size_at_price(
+                                bid_price_pre[idx],
+                                bid_size_pre[idx],
+                                trade_price,
+                            ),
+                            rule=cancellation_rule,
+                        )
+                elif current_direction < 0:
                     cancel_volume += event_size
-                    if ask_order.position is not None and ask_order.price is not None and np.isclose(ask_order.price, best_ask):
-                        ask_order.position = max(ask_order.position - event_size, 0)
+                    if _event_matches_order(ask_order, trade_price):
+                        _cancel_ahead(
+                            ask_order,
+                            event_size,
+                            level_size=_displayed_size_at_price(
+                                ask_price_pre[idx],
+                                ask_size_pre[idx],
+                                trade_price,
+                            ),
+                            rule=cancellation_rule,
+                        )
 
             inventory_path[idx + 1] = inventory
 
@@ -326,27 +370,91 @@ def _refresh_order_state(
     order: _RestingOrder,
     quote: float | None,
     best_price: float,
-    best_size: int,
+    level_prices: np.ndarray,
+    level_sizes: np.ndarray,
     side: str,
     placed_at: float,
+    order_size: int,
 ) -> _RestingOrder:
     if quote is None:
         return _RestingOrder()
     quote_level = round(float(quote), 2)
     best_level = round(float(best_price), 2)
 
-    if side == "bid":
-        active = quote_level >= best_level
-        initial_position = 0 if quote_level > best_level else max(best_size, 0)
-    else:
-        active = quote_level <= best_level
-        initial_position = 0 if quote_level < best_level else max(best_size, 0)
-
-    if not active:
-        return _RestingOrder()
     if order.price is not None and np.isclose(order.price, quote_level) and order.position is not None:
         return order
-    return _RestingOrder(price=quote_level, position=initial_position, placed_at=placed_at)
+    improves_touch = quote_level > best_level if side == "bid" else quote_level < best_level
+    initial_position = 0 if improves_touch else _displayed_size_at_price(level_prices, level_sizes, quote_level)
+    if initial_position is None:
+        return _RestingOrder()
+    return _RestingOrder(
+        price=quote_level,
+        position=initial_position,
+        remaining_size=order_size,
+        placed_at=placed_at,
+    )
+
+
+def _event_matches_order(order: _RestingOrder, event_price: float) -> bool:
+    return order.price is not None and order.position is not None and np.isclose(order.price, event_price)
+
+
+def _execute_against_order(order: _RestingOrder, executed_size: int) -> int:
+    if order.position is None or order.remaining_size <= 0:
+        return 0
+    consumed_ahead = min(max(executed_size, 0), order.position)
+    order.position -= consumed_ahead
+    available_for_order = max(executed_size - consumed_ahead, 0)
+    fill_size = min(available_for_order, order.remaining_size)
+    order.remaining_size -= fill_size
+    return fill_size
+
+
+def _cancel_ahead(
+    order: _RestingOrder,
+    cancelled_size: int,
+    *,
+    level_size: int | None,
+    rule: Literal["cancel-from-back", "proportional"],
+) -> None:
+    if order.position is None or order.position <= 0:
+        return
+    if rule == "cancel-from-back":
+        cancelled_ahead = cancelled_size
+    else:
+        displayed = max(int(level_size or 0), 1)
+        ahead_fraction = min(order.position / displayed, 1.0)
+        cancelled_ahead = int(round(cancelled_size * ahead_fraction))
+    order.position = max(order.position - min(cancelled_ahead, order.position), 0)
+
+
+def _displayed_size_at_price(
+    level_prices: np.ndarray,
+    level_sizes: np.ndarray,
+    price: float,
+) -> int | None:
+    matches = np.flatnonzero(np.isclose(np.asarray(level_prices, dtype=float), float(price)))
+    if matches.size == 0:
+        return None
+    return int(max(float(np.asarray(level_sizes, dtype=float)[int(matches[0])]), 0.0))
+
+
+def _side_levels(frame: pd.DataFrame, side: Literal["bid", "ask"]) -> tuple[np.ndarray, np.ndarray]:
+    price_columns = [column for column in frame.columns if column.startswith(f"{side}_price_")]
+    size_columns = [column for column in frame.columns if column.startswith(f"{side}_size_")]
+    if not price_columns or len(price_columns) != len(size_columns):
+        raise ValueError(f"LOBSTER order book has no complete {side} levels")
+    return (
+        frame[price_columns].to_numpy(dtype=float),
+        frame[size_columns].to_numpy(dtype=int),
+    )
+
+
+def _pre_event_levels(post_event_levels: np.ndarray) -> np.ndarray:
+    values = np.asarray(post_event_levels)
+    if values.shape[0] == 0:
+        return values.copy()
+    return np.concatenate((values[:1], values[:-1]), axis=0)
 
 
 def _event_horizon(times: np.ndarray) -> float:
