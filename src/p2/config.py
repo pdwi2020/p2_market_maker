@@ -73,6 +73,8 @@ class ReplayConfig(BaseModel):
     session_duration_seconds: float = Field(default=23_400.0, gt=0.0)
     post_only_mode: Literal["reprice", "reject"] = "reprice"
     latency_ms: float = Field(default=1.0, ge=0.0)
+    maker_rebate_per_share: float = Field(default=0.0025, ge=0.0)
+    taker_fee_per_share: float = Field(default=0.0030, ge=0.0)
 
 
 class QueueModelConfig(BaseModel):

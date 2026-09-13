@@ -62,17 +62,32 @@ def run_lobster_backtest(config: P2Config) -> BacktestResult:
         cancellation_rule=config.queue_model.cancellation_rule,
         latency_ms=config.replay.latency_ms,
         inventory_limit=config.inventory.Q_max,
+        maker_rebate_per_share=config.replay.maker_rebate_per_share,
+        taker_fee_per_share=config.replay.taker_fee_per_share,
     )
 
 
-def pnl_attribution(result: BacktestResult) -> dict[str, float]:
+def pnl_attribution(result: BacktestResult) -> dict[str, float | None]:
     inventory_path = np.asarray(result.inventory_path, dtype=float)
     return {
         "terminal_pnl": float(result.pnl),
         "inventory_variance": float(np.var(inventory_path)),
         "avg_abs_inventory": float(np.mean(np.abs(inventory_path))),
-        "spread_capture": float(result.spread_realized),
-        "n_fills": float(len(result.fill_times)),
+        "quoted_width": float(result.quoted_width),
+        "realized_spread": float(result.realized_spread),
+        "spread_capture_pct": result.spread_capture_pct,
+        "realized_spread_pnl": float(result.realized_spread_pnl),
+        "inventory_mtm_pnl": float(result.inventory_mtm_pnl),
+        "maker_rebates_pnl": float(result.maker_rebates_pnl),
+        "taker_fees_pnl": float(result.taker_fees_pnl),
+        "fees_and_rebates_pnl": float(result.fees_and_rebates_pnl),
+        "markout_1s": result.markout_1s,
+        "markout_5s": result.markout_5s,
+        "markout_30s": result.markout_30s,
+        "markout_60s": result.markout_60s,
+        "n_fills": float(result.fill_quantity),
+        "n_fill_events": float(len(result.fills)),
+        "marketable_fill_count": float(result.marketable_fill_count),
         "avg_position_at_fill": float(result.avg_position_at_fill),
         "cancellation_rate": float(result.cancellation_rate),
         "time_to_fill_mean": float(result.time_to_fill_mean),

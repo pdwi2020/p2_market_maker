@@ -7,7 +7,7 @@ from p2.baselines import AvSOptimalMM, SymmetricMM
 from p2.backtest import pnl_attribution, run_lobster_backtest, write_backtest_outputs
 from p2.calibration import calibrate_from_replay_files, write_calibration
 from p2.config import load_config
-from p2.lobster_replay import LOBSTERReplayer
+from p2.lobster_replay import LOBSTERReplayer, ReplayFill, _average_markout
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -124,6 +124,12 @@ def test_execution_direction_uses_resting_order_side(tmp_path: Path, use_queue_p
     assert result.inventory_path[2] == 1
     assert result.inventory_path[4] == 0
     assert result.inventory_path[-1] == 0
+    assert result.quoted_width == pytest.approx(2.0)
+    assert result.realized_spread == pytest.approx(2.0)
+    assert result.spread_capture_pct == pytest.approx(1.0)
+    assert result.pnl == pytest.approx(
+        result.realized_spread_pnl + result.inventory_mtm_pnl + result.fees_and_rebates_pnl
+    )
 
 
 @pytest.mark.parametrize(
@@ -227,3 +233,23 @@ def test_replay_inventory_limit_suppresses_risk_increasing_side(tmp_path: Path) 
 
     assert result.inventory_path[-1] == 2
     assert np.max(np.abs(result.inventory_path)) == 2
+
+
+@pytest.mark.parametrize(
+    ("horizon", "expected"),
+    [(1.0, 2.0), (5.0, 3.0), (30.0, 4.0), (60.0, 5.0)],
+)
+def test_fill_markout_uses_signed_future_mid_move(horizon: float, expected: float) -> None:
+    fill = ReplayFill(
+        event_index=1,
+        time=1.0,
+        side="bid",
+        price=99.0,
+        quantity=1,
+        mid_at_fill=100.0,
+        quoted_width=2.0,
+    )
+    times = np.asarray([0.0, 1.0, 2.0, 6.0, 31.0, 61.0])
+    mids = np.asarray([100.0, 100.0, 101.0, 102.0, 103.0, 104.0])
+
+    assert _average_markout([fill], times, mids, horizon) == pytest.approx(expected)

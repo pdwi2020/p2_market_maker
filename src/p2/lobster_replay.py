@@ -14,17 +14,51 @@ DEFAULT_SESSION_DURATION_SECONDS = 23_400.0
 
 
 @dataclass(slots=True)
+class ReplayFill:
+    event_index: int
+    time: float
+    side: Literal["bid", "ask"]
+    price: float
+    quantity: int
+    mid_at_fill: float
+    quoted_width: float | None
+
+    @property
+    def inventory_delta(self) -> int:
+        return self.quantity if self.side == "bid" else -self.quantity
+
+
+@dataclass(slots=True)
 class BacktestResult:
     pnl: float
     inventory_path: np.ndarray
-    fill_times: list[float]
-    spread_realized: float
+    fills: list[ReplayFill]
+    quoted_width: float = 0.0
+    realized_spread: float = 0.0
+    spread_capture_pct: float | None = None
+    realized_spread_pnl: float = 0.0
+    inventory_mtm_pnl: float = 0.0
+    maker_rebates_pnl: float = 0.0
+    taker_fees_pnl: float = 0.0
+    fees_and_rebates_pnl: float = 0.0
+    markout_1s: float | None = None
+    markout_5s: float | None = None
+    markout_30s: float | None = None
+    markout_60s: float | None = None
     avg_position_at_fill: float = 0.0
     cancellation_rate: float = 0.0
     time_to_fill_mean: float = 0.0
     time_to_fill_p50: float = 0.0
     time_to_fill_p90: float = 0.0
     marketable_fill_count: int = 0
+
+    @property
+    def fill_times(self) -> list[float]:
+        return [fill.time for fill in self.fills]
+
+    @property
+    def fill_quantity(self) -> int:
+        return sum(fill.quantity for fill in self.fills)
 
 
 @dataclass(slots=True)
@@ -33,6 +67,7 @@ class _RestingOrder:
     position: int | None = None
     remaining_size: int = 0
     placed_at: float | None = None
+    quoted_width: float | None = None
 
 
 class LOBSTERReplayer:
@@ -112,11 +147,15 @@ class LOBSTERReplayer:
         cancellation_rule: Literal["cancel-from-back", "proportional"] = "proportional",
         latency_ms: float = 1.0,
         inventory_limit: int | None = None,
+        maker_rebate_per_share: float = 0.0025,
+        taker_fee_per_share: float = 0.0030,
     ) -> BacktestResult:
         if latency_ms < 0.0:
             raise ValueError("latency_ms must be non-negative")
         if inventory_limit is not None and inventory_limit < 1:
             raise ValueError("inventory_limit must be positive")
+        if maker_rebate_per_share < 0.0 or taker_fee_per_share < 0.0:
+            raise ValueError("fees and rebates must be non-negative")
         if use_queue_position:
             return self._run_queue_aware_strategy(
                 strategy_fn,
@@ -126,6 +165,8 @@ class LOBSTERReplayer:
                 cancellation_rule,
                 latency_ms,
                 inventory_limit,
+                maker_rebate_per_share,
+                taker_fee_per_share,
             )
         return self._run_instantaneous_strategy(
             strategy_fn,
@@ -133,6 +174,8 @@ class LOBSTERReplayer:
             post_only_mode,
             latency_ms,
             inventory_limit,
+            maker_rebate_per_share,
+            taker_fee_per_share,
         )
 
     def _run_instantaneous_strategy(
@@ -142,6 +185,8 @@ class LOBSTERReplayer:
         post_only_mode: Literal["reprice", "reject"],
         latency_ms: float,
         inventory_limit: int | None,
+        maker_rebate_per_share: float,
+        taker_fee_per_share: float,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -162,8 +207,7 @@ class LOBSTERReplayer:
         inventory = 0
         cash = 0.0
         inventory_path = np.zeros(n_rows + 1, dtype=int)
-        fill_times: list[float] = []
-        spreads: list[float] = []
+        fills: list[ReplayFill] = []
 
         for idx in range(n_rows):
             t = float(strategy_times[idx])
@@ -198,25 +242,42 @@ class LOBSTERReplayer:
             if int(direction[idx]) > 0 and bid is not None and bid >= trade_price:
                 cash -= bid
                 inventory += 1
-                fill_times.append(t)
-                if ask is not None:
-                    spreads.append(ask - bid)
+                fills.append(
+                    ReplayFill(
+                        event_index=idx,
+                        time=t,
+                        side="bid",
+                        price=bid,
+                        quantity=1,
+                        mid_at_fill=float(mids[idx]),
+                        quoted_width=ask - bid if ask is not None else None,
+                    )
+                )
             elif int(direction[idx]) < 0 and ask is not None and ask <= trade_price:
                 cash += ask
                 inventory -= 1
-                fill_times.append(t)
-                if bid is not None:
-                    spreads.append(ask - bid)
+                fills.append(
+                    ReplayFill(
+                        event_index=idx,
+                        time=t,
+                        side="ask",
+                        price=ask,
+                        quantity=1,
+                        mid_at_fill=float(mids[idx]),
+                        quoted_width=ask - bid if bid is not None else None,
+                    )
+                )
 
             inventory_path[idx + 1] = inventory
 
-        pnl = cash + inventory * float(mids[n_rows - 1])
-        spread_realized = float(np.mean(spreads)) if spreads else 0.0
-        return BacktestResult(
-            pnl=float(pnl),
+        return _finalize_result(
+            cash=cash,
             inventory_path=inventory_path,
-            fill_times=fill_times,
-            spread_realized=spread_realized,
+            fills=fills,
+            times=times[:n_rows],
+            mids=mids[:n_rows],
+            maker_rebate_per_share=maker_rebate_per_share,
+            taker_fee_per_share=taker_fee_per_share,
         )
 
     def _run_queue_aware_strategy(
@@ -228,6 +289,8 @@ class LOBSTERReplayer:
         cancellation_rule: Literal["cancel-from-back", "proportional"],
         latency_ms: float,
         inventory_limit: int | None,
+        maker_rebate_per_share: float,
+        taker_fee_per_share: float,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -263,8 +326,7 @@ class LOBSTERReplayer:
             return BacktestResult(
                 pnl=0.0,
                 inventory_path=np.zeros(1, dtype=int),
-                fill_times=[],
-                spread_realized=0.0,
+                fills=[],
             )
 
         bid_price_pre = _pre_event_levels(bid_price_post[:n_rows])
@@ -276,8 +338,7 @@ class LOBSTERReplayer:
         inventory = 0
         cash = 0.0
         inventory_path = np.zeros(n_rows + 1, dtype=int)
-        fill_times: list[float] = []
-        spreads: list[float] = []
+        fills: list[ReplayFill] = []
         positions_at_fill: list[int] = []
         time_to_fill: list[float] = []
         cancel_volume = 0.0
@@ -310,6 +371,7 @@ class LOBSTERReplayer:
                     bid_size=order_size,
                     ask_size=order_size,
                 )
+            quoted_width = ask - bid if ask is not None and bid is not None else None
             bid_order = _refresh_order_state(
                 order=bid_order,
                 quote=bid,
@@ -319,6 +381,7 @@ class LOBSTERReplayer:
                 side="bid",
                 placed_at=float(strategy_times[decision_idx]) if decision_idx >= 0 else t,
                 order_size=order_size,
+                quoted_width=quoted_width,
             )
             ask_order = _refresh_order_state(
                 order=ask_order,
@@ -329,6 +392,7 @@ class LOBSTERReplayer:
                 side="ask",
                 placed_at=float(strategy_times[decision_idx]) if decision_idx >= 0 else t,
                 order_size=order_size,
+                quoted_width=quoted_width,
             )
 
             current_event = int(event_type[idx])
@@ -340,9 +404,17 @@ class LOBSTERReplayer:
                     if fill_size > 0:
                         cash -= float(bid_order.price) * fill_size
                         inventory += fill_size
-                        fill_times.append(t)
-                        if ask is not None and bid is not None:
-                            spreads.append(ask - bid)
+                        fills.append(
+                            ReplayFill(
+                                event_index=idx,
+                                time=t,
+                                side="bid",
+                                price=float(bid_order.price),
+                                quantity=fill_size,
+                                mid_at_fill=float(mids[idx]),
+                                quoted_width=bid_order.quoted_width,
+                            )
+                        )
                         positions_at_fill.append(position_before)
                         if bid_order.placed_at is not None:
                             time_to_fill.append(max(t - bid_order.placed_at, 0.0))
@@ -354,9 +426,17 @@ class LOBSTERReplayer:
                     if fill_size > 0:
                         cash += float(ask_order.price) * fill_size
                         inventory -= fill_size
-                        fill_times.append(t)
-                        if ask is not None and bid is not None:
-                            spreads.append(ask - bid)
+                        fills.append(
+                            ReplayFill(
+                                event_index=idx,
+                                time=t,
+                                side="ask",
+                                price=float(ask_order.price),
+                                quantity=fill_size,
+                                mid_at_fill=float(mids[idx]),
+                                quoted_width=ask_order.quoted_width,
+                            )
+                        )
                         positions_at_fill.append(position_before)
                         if ask_order.placed_at is not None:
                             time_to_fill.append(max(t - ask_order.placed_at, 0.0))
@@ -392,21 +472,108 @@ class LOBSTERReplayer:
 
             inventory_path[idx + 1] = inventory
 
-        pnl = cash + inventory * float(mids[n_rows - 1])
-        spread_realized = float(np.mean(spreads)) if spreads else 0.0
         horizon = _event_horizon(times[:n_rows])
         latencies = np.asarray(time_to_fill, dtype=float)
-        return BacktestResult(
-            pnl=float(pnl),
+        return _finalize_result(
+            cash=cash,
             inventory_path=inventory_path,
-            fill_times=fill_times,
-            spread_realized=spread_realized,
+            fills=fills,
+            times=times[:n_rows],
+            mids=mids[:n_rows],
+            maker_rebate_per_share=maker_rebate_per_share,
+            taker_fee_per_share=taker_fee_per_share,
             avg_position_at_fill=float(np.mean(positions_at_fill)) if positions_at_fill else 0.0,
             cancellation_rate=float(cancel_volume / max(horizon, 1e-12)),
             time_to_fill_mean=float(np.mean(latencies)) if latencies.size else 0.0,
             time_to_fill_p50=float(np.percentile(latencies, 50)) if latencies.size else 0.0,
             time_to_fill_p90=float(np.percentile(latencies, 90)) if latencies.size else 0.0,
         )
+
+
+def _finalize_result(
+    *,
+    cash: float,
+    inventory_path: np.ndarray,
+    fills: list[ReplayFill],
+    times: np.ndarray,
+    mids: np.ndarray,
+    maker_rebate_per_share: float,
+    taker_fee_per_share: float,
+    avg_position_at_fill: float = 0.0,
+    cancellation_rate: float = 0.0,
+    time_to_fill_mean: float = 0.0,
+    time_to_fill_p50: float = 0.0,
+    time_to_fill_p90: float = 0.0,
+) -> BacktestResult:
+    terminal_mid = float(mids[-1]) if len(mids) else 0.0
+    terminal_inventory = int(inventory_path[-1]) if inventory_path.size else 0
+    fill_quantity = sum(fill.quantity for fill in fills)
+    maker_rebates_pnl = maker_rebate_per_share * fill_quantity
+    taker_fees_pnl = 0.0 * taker_fee_per_share
+    fees_and_rebates_pnl = maker_rebates_pnl - taker_fees_pnl
+    realized_spread_pnl = float(
+        sum(fill.inventory_delta * (fill.mid_at_fill - fill.price) for fill in fills)
+    )
+    inventory_mtm_pnl = float(
+        sum(fill.inventory_delta * (terminal_mid - fill.mid_at_fill) for fill in fills)
+    )
+    total_pnl = float(cash + terminal_inventory * terminal_mid + fees_and_rebates_pnl)
+    realized_spread = (
+        float(sum(2.0 * abs(fill.price - fill.mid_at_fill) * fill.quantity for fill in fills) / fill_quantity)
+        if fill_quantity
+        else 0.0
+    )
+    width_quantity = sum(fill.quantity for fill in fills if fill.quoted_width is not None)
+    quoted_width = (
+        float(
+            sum(float(fill.quoted_width) * fill.quantity for fill in fills if fill.quoted_width is not None)
+            / width_quantity
+        )
+        if width_quantity
+        else 0.0
+    )
+    spread_capture_pct = realized_spread / quoted_width if quoted_width > 0.0 else None
+    markouts = {horizon: _average_markout(fills, times, mids, horizon) for horizon in (1.0, 5.0, 30.0, 60.0)}
+    return BacktestResult(
+        pnl=total_pnl,
+        inventory_path=inventory_path,
+        fills=fills,
+        quoted_width=quoted_width,
+        realized_spread=realized_spread,
+        spread_capture_pct=spread_capture_pct,
+        realized_spread_pnl=realized_spread_pnl,
+        inventory_mtm_pnl=inventory_mtm_pnl,
+        maker_rebates_pnl=maker_rebates_pnl,
+        taker_fees_pnl=taker_fees_pnl,
+        fees_and_rebates_pnl=fees_and_rebates_pnl,
+        markout_1s=markouts[1.0],
+        markout_5s=markouts[5.0],
+        markout_30s=markouts[30.0],
+        markout_60s=markouts[60.0],
+        avg_position_at_fill=avg_position_at_fill,
+        cancellation_rate=cancellation_rate,
+        time_to_fill_mean=time_to_fill_mean,
+        time_to_fill_p50=time_to_fill_p50,
+        time_to_fill_p90=time_to_fill_p90,
+    )
+
+
+def _average_markout(
+    fills: list[ReplayFill],
+    times: np.ndarray,
+    mids: np.ndarray,
+    horizon_seconds: float,
+) -> float | None:
+    total = 0.0
+    quantity = 0
+    for fill in fills:
+        target_time = float(times[fill.event_index]) + horizon_seconds
+        target_index = int(np.searchsorted(times, target_time, side="left"))
+        if target_index >= len(mids):
+            continue
+        total += fill.inventory_delta * (float(mids[target_index]) - fill.price)
+        quantity += fill.quantity
+    return total / quantity if quantity else None
 
 
 def _refresh_order_state(
@@ -419,6 +586,7 @@ def _refresh_order_state(
     side: str,
     placed_at: float,
     order_size: int,
+    quoted_width: float | None,
 ) -> _RestingOrder:
     if quote is None:
         return _RestingOrder()
@@ -436,6 +604,7 @@ def _refresh_order_state(
         position=initial_position,
         remaining_size=order_size,
         placed_at=placed_at,
+        quoted_width=quoted_width,
     )
 
 

@@ -130,9 +130,10 @@ def _replay_metrics(result: BacktestResult) -> dict[str, float]:
     inventory = np.asarray(result.inventory_path, dtype=float)
     return {
         "replay_terminal_pnl": float(result.pnl),
-        "replay_spread_capture": float(result.spread_realized),
+        "replay_quoted_width": float(result.quoted_width),
+        "replay_realized_spread": float(result.realized_spread),
         "replay_avg_abs_inventory": float(np.mean(np.abs(inventory))) if inventory.size else 0.0,
-        "replay_fill_count": float(len(result.fill_times)),
+        "replay_fill_count": float(result.fill_quantity),
     }
 
 
@@ -252,7 +253,8 @@ def run_symbol_sweep(
             "fill_rate_bid",
             "fill_rate_ask",
             "replay_terminal_pnl",
-            "replay_spread_capture",
+            "replay_quoted_width",
+            "replay_realized_spread",
             "replay_avg_abs_inventory",
             "replay_fill_count",
         ]

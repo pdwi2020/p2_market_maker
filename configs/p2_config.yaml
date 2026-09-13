@@ -42,6 +42,9 @@ replay:
   session_duration_seconds: 23400.0
   post_only_mode: reprice
   latency_ms: 1.0
+  # Assumed 2012 Nasdaq economics in dollars per share.
+  maker_rebate_per_share: 0.0025
+  taker_fee_per_share: 0.0030
 
 queue_model:
   enabled: false
