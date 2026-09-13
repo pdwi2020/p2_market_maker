@@ -227,20 +227,22 @@ Relative to the current state, the exponent increment is
 \(-\delta^b + \phi(q+1,t) - \phi(q,t)\). The analogous ask increment is
 \(\delta^a + \phi(q-1,t) - \phi(q,t)\).
 
-After substituting the ansatz into the HJB and dividing by the common negative
-factor \(-e^{-\gamma(x + q s + \phi(q,t))}\), we obtain
+The common factor is \(V=-e^{-\gamma(x+qs+\phi)}<0\). Dividing by it therefore
+reverses the ordering inside each control term: a maximum before division is a
+minimum afterward. Equivalently, negating the minimized jump contribution and
+scaling by \(1/\gamma\) gives the following positive maximization form:
 
 \[
 0
 = \partial_t \phi(q,t)
 - \frac{1}{2}\gamma \sigma^2 q^2
-+ \max_{\delta^b} A e^{-\kappa \delta^b}
++ \max_{\delta^b} \frac{A}{\gamma} e^{-\kappa \delta^b}
 \left(
-e^{-\gamma(\delta^b + \phi(q+1,t) - \phi(q,t))} - 1
+1 - e^{-\gamma(\delta^b + \phi(q+1,t) - \phi(q,t))}
 \right)
-+ \max_{\delta^a} A e^{-\kappa \delta^a}
++ \max_{\delta^a} \frac{A}{\gamma} e^{-\kappa \delta^a}
 \left(
-e^{-\gamma(\delta^a + \phi(q-1,t) - \phi(q,t))} - 1
+1 - e^{-\gamma(\delta^a + \phi(q-1,t) - \phi(q,t))}
 \right).
 \]
 
@@ -257,9 +259,9 @@ The bid contribution to the HJB is then
 
 \[
 f_b(\delta^b)
-= A e^{-\kappa \delta^b}
+= \frac{A}{\gamma} e^{-\kappa \delta^b}
 \left(
-e^{-\gamma(\delta^b + \Delta_b \phi(q,t))} - 1
+1 - e^{-\gamma(\delta^b + \Delta_b \phi(q,t))}
 \right).
 \]
 
@@ -267,10 +269,10 @@ Differentiating and setting the derivative to zero gives
 
 \[
 0
-= A e^{-\kappa \delta^b}
+= \frac{A}{\gamma} e^{-\kappa \delta^b}
 \left[
--\kappa \left(e^{-\gamma(\delta^b + \Delta_b \phi)} - 1\right)
-- \gamma e^{-\gamma(\delta^b + \Delta_b \phi)}
+-\kappa \left(1 - e^{-\gamma(\delta^b + \Delta_b \phi)}\right)
++ \gamma e^{-\gamma(\delta^b + \Delta_b \phi)}
 \right].
 \]
 
@@ -300,7 +302,7 @@ inventory term explicitly.
 One-line symbolic verification of the bid-side first-order condition:
 
 ```python
-import sympy as sp; δ, γ, κ, Δ = sp.symbols('δ γ κ Δ', positive=True); f = sp.exp(-κ*δ)*(sp.exp(-γ*(δ + Δ)) - 1); sp.solve(sp.diff(f, δ), δ)[0]
+import sympy as sp; δ, γ, κ, Δ = sp.symbols('δ γ κ Δ', positive=True); f = sp.exp(-κ*δ)*(1 - sp.exp(-γ*(δ + Δ))); sp.solve(sp.diff(f, δ), δ)[0]
 ```
 
 Sympy returns
