@@ -1,6 +1,6 @@
 import pytest
 
-from p2.baselines import ConstantSpreadMM, SymmetricMM, _simulate_quotes, compare_strategies
+from p2.baselines import ConstantSpreadMM, SymmetricMM, compare_strategies
 from p2.simulator import AVSSimulator
 
 

@@ -199,7 +199,8 @@ def test_latency_exposes_stale_quote_to_pickoff(tmp_path: Path) -> None:
         )
     )
     replayer = LOBSTERReplayer().load(orderbook_file, message_file)
-    strategy = lambda mid, inventory, t: (mid - 1.0, mid + 1.0)
+    def strategy(mid, inventory, t):
+        return mid - 1.0, mid + 1.0
 
     current_result = replayer.run_strategy(strategy, latency_ms=0.0)
     stale_result = replayer.run_strategy(strategy, latency_ms=1.0)

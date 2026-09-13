@@ -1,210 +1,153 @@
-# P2 — Avellaneda-Stoikov Market Maker with HJB Derivation and Queue-Reactive GM Layer
-[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-46%20passing-brightgreen.svg)]()
+# P2 — Avellaneda–Stoikov Market Making with Queue-Aware Replay
+
+[![CI](https://github.com/pdwi2020/p2_market_maker/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/pdwi2020/p2_market_maker/actions/workflows/ci.yml)
+[![Python 3.11–3.12](https://img.shields.io/badge/python-3.11%E2%80%933.12-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> An end-to-end implementation of the Avellaneda-Stoikov (2008)
-> market-making policy: HJB derivation from Ho-Stoll utility through
-> queue-reactive correction and a Glosten-Milgrom Bayesian
-> adverse-selection layer, validated on LOBSTER replay with hard
-> inventory limits enforced via quote suppression.
+This repository implements the Avellaneda–Stoikov (2008) market-making
+policy from its HJB derivation through synthetic simulation and
+queue-aware LOBSTER replay. The replay path models post-only placement,
+FIFO queue priority, quote latency, maker rebates, hard inventory limits,
+and forward markouts.
 
-## TL;DR
+## What is implemented
 
-- **HJB derivation appendix** (`docs/hjb_derivation.md`, 3045 words):
-  Ho-Stoll utility → Avellaneda-Stoikov closed form → queue-reactive
-  correction → Glosten-Milgrom coupling
-- **Synthetic Poisson LOB simulator** with configurable `A` and
-  `kappa`, plus replay-side calibration on the bundled AAPL sample
-- **LOBSTER AAPL 2012-06-21 replay**: disciplined quoters reproduce
-  about `$662` terminal PnL on `972` fills with about `7.9%` spread
-  capture
-- **Cross-symbol sweep scaffold** with one shared accounting
-  convention across simulator and replay; the checked-in artifact ships
-  AAPL and records `AMZN/GOOG/INTC/MSFT/SPY` skips
-- **46 passing tests**; simulator and replay share the same fill,
-  inventory, and adverse-selection semantics
+- Closed-form reservation price and optimal spread with a documented HJB
+  derivation.
+- Deterministic NumPy simulation and an optional Torch accelerator path.
+- Queue-reactive fill logic with cancellation and partial-fill handling.
+- A Glosten–Milgrom Bayesian adverse-selection intensity layer.
+- Top-of-book LOBSTER replay with post-only quote handling and latency.
+- Shared cash, inventory, fee, and mark-to-market accounting.
+- Baseline comparisons and a five-symbol public-sample research sweep.
+- A direct replication of the central 2008 parameter experiment.
 
-## Background
+## Validated AAPL replay
 
-The Avellaneda-Stoikov (2008) optimal market-making problem solves an
-HJB equation for a dealer trying to maximize expected utility of
-terminal wealth subject to inventory risk. The closed form has a
-reservation price that drifts inventory back toward zero and a
-half-spread that grows with risk aversion and time-to-horizon.
-
-This repo implements the model in three layers:
-
-1. **Pure stochastic-control core**: closed-form quoter from the
-   Ho-Stoll → Avellaneda-Stoikov limit.
-2. **Queue-reactive correction**: fill quality depends on local queue
-   depth and FIFO state, not just quote distance.
-3. **Glosten-Milgrom adverse-selection layer**: a Bayesian belief on
-   informed-vs-uninformed order flow modulates effective buy and sell
-   intensities, giving the quoter a way to widen or skew when informed
-   flow is suspected.
-
-The derivation is written out in full in `docs/hjb_derivation.md` so
-the reader can see exactly which approximations were taken.
-
-## What's in the repo
-
-- `src/p2/hjb_solver.py` — closed-form Avellaneda-Stoikov reservation
-  price and spread formulas
-- `src/p2/execution.py` — shared execution engine used by the
-  simulator and baseline quoters
-- `src/p2/queue.py` — queue-reactive depth/FIFO model used in
-  simulation and replay
-- `src/p2/glosten_milgrom.py` — Glosten-Milgrom Bayesian
-  adverse-selection layer
-- `src/p2/lobster_replay.py` — simplified top-of-book LOBSTER replay
-  engine
-- `src/p2/backtest.py` — replay runner and summary writer
-- `configs/p2_config.yaml` — typed config (`seed: 42`, `gamma`, `T`,
-  `A`, `kappa`, replay file paths)
-- `data/lobster/` — bundled AAPL 2012-06-21 sample in LOBSTER format
-- `docs/hjb_derivation.md` — 3045-word derivation appendix
-- `memo.md` — 2501-word research memo (AAPL replay readout, GM
-  sensitivity, cross-symbol caveats)
-- `tests/` — 46 passing tests
-
-## Headline LOBSTER replay result (AAPL 2012-06-21, top-of-book)
+The queue-aware configuration was validated on the public AAPL sample for
+2012-06-21 at level 10. Raw data are not tracked in Git.
 
 | Metric | Value |
 | --- | ---: |
-| Terminal PnL | ~$662 |
-| Total fills | 972 |
-| Spread capture | ~7.9% |
-| Inventory limit | enforced by quote suppression |
-| Adverse-selection model | GM Bayesian belief layer (configurable) |
+| Terminal PnL | $7.305 |
+| Filled shares | 1,106 |
+| Quoted width | $0.08022 |
+| Realized spread per filled share | $0.07731 |
+| Realized-spread / quoted-width ratio | 96.38% |
+| Realized-spread PnL | $42.255 |
+| Inventory mark-to-market | −$37.715 |
+| Maker rebates | $2.765 |
+| Maximum absolute inventory | 10 shares |
+| Marketable quotes at placement | 0 |
 
-## Methods
+The accounting components reconcile exactly:
+`42.255 - 37.715 + 2.765 = 7.305`.
 
-- **HJB control problem** in inventory + cash + mid-price state,
-  solved in closed form under the Ho-Stoll exponential-utility limit
-- **Queue-reactive correction** inspired by Huang-Lehalle-Rosenbaum
-  (2015) and Cont-Kukanov-Stoikov (2014): execution depends on depth
-  and FIFO state, not only spread
-- **Glosten-Milgrom adverse-selection** as an intensity-function
-  modifier driven by a Bayesian belief on informed flow
-- **Inventory hard limits** enforced by quote suppression on the side
-  that would push inventory beyond `±Q_max`, not by clipping fills
-  after the fact
-- **Shared accounting**: simulator, sweep, and LOBSTER replay use the
-  same fill, inventory, and adverse-selection conventions, so
-  comparisons stay honest
+## Repository map
 
-## Headline figures
+- `src/p2/hjb_solver.py` — reservation-price and spread formulas.
+- `src/p2/execution.py` — shared synthetic execution and accounting.
+- `src/p2/queue.py` — queue depth, FIFO, cancellation, and calibration.
+- `src/p2/glosten_milgrom.py` — Bayesian adverse-selection layer.
+- `src/p2/lobster_replay.py` — queue-aware LOBSTER replay engine.
+- `src/p2/backtest.py` — replay runner and PnL attribution.
+- `src/p2/simulator.py` — synthetic simulation and 2008 replication.
+- `configs/` — deterministic simulation and replay configurations.
+- `docs/hjb_derivation.md` — derivation and sign conventions.
+- `tests/` — offline unit, regression, and accounting checks.
 
-### LOBSTER replay PnL
-![LOBSTER PnL curve](results/readme_figures/lobster_pnl_curve.png)
+## Install and test
 
-### Inventory trajectory with hard-limit band
-![Inventory trajectory](results/readme_figures/inventory_trajectory.png)
-
-### Fill price distribution (relative to mid)
-![Fill distribution](results/readme_figures/fill_distribution.png)
-
-### HJB quote example (theoretical)
-![HJB optimal quotes with inventory skew](results/readme_figures/hjb_quote_example.png)
-
-### Ablation: AvS vs heuristic quoters
-![Ablation](results/readme_figures/ablation_quoters.png)
-
-### Parameter sweep heatmap
-![Gamma × Kappa sweep heatmap](results/default_synthetic/avs_sweep_heatmap.png)
-
-## How to reproduce
+Python 3.11 and 3.12 are supported.
 
 ```bash
 git clone https://github.com/pdwi2020/p2_market_maker.git
 cd p2_market_maker
-python3.14 -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
-make simulate             # synthetic Poisson LOB run
-make backtest             # LOBSTER replay
-make sweep-cross-symbol   # multi-symbol sweep scaffold (AAPL ships; other names skip without data)
-make test                 # 46 tests
+python3 -m venv .venv
+source .venv/bin/activate
+make install
+make test
 ```
 
-CPU-only for the checked-in workflow; no GPU is required. Default
-config lives in `configs/p2_config.yaml`.
-
-The README figures can be regenerated directly from the checked-in
-snapshot with:
+The default sweep runs on NumPy and does not require Torch. Optional
+acceleration packages can be installed separately:
 
 ```bash
-python scripts/render_readme_figures.py
+python -m pip install -e '.[gpu]'
+python -m pip install -e '.[fast]'
 ```
 
-## Honest caveats
+## Reproducible commands
 
-- **Single-day checked-in replay**: the bundled evidence is one AAPL
-  session, `2012-06-21`. That validates plumbing, not cross-day
-  robustness.
-- **Top-of-book only**: the replay path is deliberately simplified and
-  does not reconstruct full queue priority, venue fragmentation,
-  hidden liquidity, or partial-fill priority.
-- **Queue + GM are not jointly solved in one coupled HJB**: the queue
-  layer is a correction module and the Glosten-Milgrom layer is a
-  first-pass intensity modifier, not a full production microstructure
-  model.
-- **No latency model**: round-trip latency and stale-quote risk are
-  assumed away; a real HFT shop would model them explicitly.
+| Command | Purpose |
+| --- | --- |
+| `make install` | Install the package and development checks. |
+| `make test` | Run the complete offline suite. |
+| `make lint` | Run static checks over source, scripts, and tests. |
+| `make simulate` | Run the deterministic synthetic baseline. |
+| `make download-lobster` | Download all five public level-10 samples and print SHA-256 hashes. |
+| `make replay` | Replay the queue-aware AAPL configuration. |
+| `make research` | Run the cross-symbol baseline comparison. |
+| `make figures` | Regenerate figures under the ignored `results/` tree. |
+| `make clean` | Remove local build and test caches. |
+
+`make download-lobster` obtains AAPL, AMZN, GOOG, INTC, and MSFT for
+2012-06-21 directly from the official sample host. To download a subset:
+
+```bash
+python scripts/download_lobster_samples.py AAPL MSFT
+```
+
+## Data and cache paths
+
+No external data are required for installation or the test suite. Runtime
+paths are controlled through three environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `P2_DATA_DIR` | `<repo>/data` | Raw and downloaded market data. |
+| `P2_CACHE_DIR` | `<repo>/.cache` | Reusable local cache files. |
+| `P2_LAKE_DIR` | unset | Optional external lake; features that need it must skip when unset. |
+
+The five replay samples come from the
+[official LOBSTER sample page](https://data.lobsterdata.com/info/DataSamples.php).
+Each archive contains matching message and order-book CSV files. Downloaded
+data, caches, build metadata, and ordinary results are ignored. Only small,
+explicitly selected derived outputs may be committed under
+`results/published/`.
+
+## Reproducibility notes
+
+- Checked-in configurations carry fixed seeds.
+- CI installs the package on Python 3.11 and 3.12 and runs without market
+  data or an external lake.
+- The sample downloader prints SHA-256 for each archive and extracted file.
+- Relative paths resolve from the repository root, not the caller's working
+  directory.
+
+## Limitations
+
+- The validated replay covers one public AAPL session; it is not evidence of
+  cross-day or live-trading performance.
+- Replay is queue-aware but remains a simplified single-venue model.
+- Quote latency is configurable rather than empirically calibrated.
+- The queue correction and Glosten–Milgrom layer are modular additions, not a
+  jointly solved coupled HJB.
+- Optional accelerator results can differ slightly across devices because of
+  floating-point and random-number implementations.
 
 ## References
 
-- Avellaneda, M. & Stoikov, S. (2008). High-frequency trading in a
-  limit order book. *Quantitative Finance* 8(3).
-- Ho, T. & Stoll, H. R. (1981). Optimal dealer pricing under
-  transactions and return uncertainty. *Journal of Financial Economics*
-  9(1).
-- Glosten, L. R. & Milgrom, P. R. (1985). Bid, ask and transaction
-  prices in a specialist market with heterogeneously informed traders.
-  *Journal of Financial Economics* 14(1).
-- Huang, W., Lehalle, C.-A. & Rosenbaum, M. (2015). Simulating and
-  analyzing order book data: The queue-reactive model.
-
-## Project context
-
-This repo is project **P2 (flagship)** in a 5-project quant research
-portfolio prepared for buy-side QR internship applications
-(Summer 2027). The other 4:
-
-- [`p1_factor_research`](https://github.com/pdwi2020/p1_factor_research)
-  — Cross-sectional equity factor research on Russell-3000 with BARRA
-  + Almgren-Chriss capacity
-- [`p3_vol_surface`](https://github.com/pdwi2020/p3_vol_surface) —
-  Volatility surface dynamics: SVI + SSVI + rBergomi calibration,
-  HAR-RV vs GARCH(1,1) horserace
-- [`p4_stat_arb`](https://github.com/pdwi2020/p4_stat_arb) —
-  S&P 500 statistical arbitrage with Bonferroni + BH + BY + Storey +
-  Hansen SPA + White Reality Check
-- [`p5_gpu_mc_exotics`](https://github.com/pdwi2020/p5_gpu_mc_exotics)
-  — GPU-accelerated Monte Carlo for exotic options (Heston, Bates,
-  HHW) on CUDA T4 (also flagship)
+- Avellaneda, M. & Stoikov, S. (2008). High-frequency trading in a limit
+  order book. *Quantitative Finance*, 8(3).
+- Ho, T. & Stoll, H. R. (1981). Optimal dealer pricing under transactions and
+  return uncertainty. *Journal of Financial Economics*, 9(1).
+- Glosten, L. R. & Milgrom, P. R. (1985). Bid, ask and transaction prices in
+  a specialist market with heterogeneously informed traders. *Journal of
+  Financial Economics*, 14(1).
+- Huang, W., Lehalle, C.-A. & Rosenbaum, M. (2015). Simulating and analyzing
+  order book data: the queue-reactive model.
 
 ## License
 
-MIT. See `LICENSE`.
-
-## Data Sources
-
-All data sourced from the X9 DuckDB catalog at `/Volumes/Crucial X9/data/catalog.duckdb`.
-
-| View | Description | Size |
-|---|---|---|
-| `bybit_btc_lob` | Bybit BTC L2 order book (15s snapshots, 2025–2026) | 60 GB |
-| `bybit_eth_lob` | Bybit ETH L2 order book | — |
-| `hl_btc_l2` | Hyperliquid BTC L2 | — |
-
-**Local loader**: `src/p2/data/bybit_loader.py`
-```python
-from src.p2.data.bybit_loader import load_bybit_lob, estimate_adverse_selection
-lob = load_bybit_lob("BTC", "2025-01-01", "2025-06-30")
-```
-
-Run real LOB simulation (vs synthetic Poisson):
-```bash
-make simulate-real
-```
+MIT. See [LICENSE](LICENSE).

@@ -14,6 +14,7 @@ from p2.cross_symbol_sweep import (
     LOBSTER_FREE_SAMPLE_URLS,
     run_symbol_sweep,
 )
+from p2.config import load_config
 from p2.hjb_solver import optimal_spread
 
 
@@ -63,10 +64,11 @@ def _default_quoters() -> dict[str, object]:
 
 
 def main() -> None:
+    default_lobster_dir = load_config().paths.lobster_dir
     parser = argparse.ArgumentParser(description="Run the cross-symbol LOBSTER ablation sweep.")
     parser.add_argument("--symbols", nargs="*", default=None)
     parser.add_argument("--date", default=DEFAULT_DATE)
-    parser.add_argument("--data-dir", default="data/lobster")
+    parser.add_argument("--data-dir", type=Path, default=default_lobster_dir)
     parser.add_argument("--results-dir", default="results/cross_symbol_ablation")
     args = parser.parse_args()
 
@@ -75,7 +77,7 @@ def main() -> None:
     run_symbol_sweep(
         symbols=symbols,
         date=args.date,
-        data_dir=Path(args.data_dir),
+        data_dir=args.data_dir,
         results_dir=results_dir,
         quoters=_default_quoters(),
     )

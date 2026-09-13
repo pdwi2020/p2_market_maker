@@ -1,7 +1,7 @@
 """Week 2 five-scenario regime-stressed LOBSTER-style sweep.
 
-Run with the shared venv:
-    /Volumes/Crucial X9/alpha_engine/.venv/bin/python scripts/run_week_sweep.py
+Run after the editable install:
+    python3 scripts/run_week_sweep.py
 
 Deterministic seeds:
     scenario_0_base: 20260424
