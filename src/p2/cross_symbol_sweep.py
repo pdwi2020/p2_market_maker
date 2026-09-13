@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
-import zipfile
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +19,7 @@ import pandas as pd
 from p2.baselines import _simulate_quotes
 from p2.calibration import calibrate_from_replay_files
 from p2.config import AdverseSelectionConfig
+from p2.lobster_samples import LOBSTER_SAMPLE_SYMBOLS, _extract_zip, sample_archive_url
 from p2.lobster_replay import BacktestResult, LOBSTERReplayer
 
 
@@ -34,15 +34,10 @@ DEFAULT_Q_MAX = 10
 DEFAULT_N_PATHS = 1000
 
 # LOBSTER sample downloads are single archives containing both files. The tuple
-# repeats the archive slot for API compatibility when a canonical direct URL is
-# known; symbols with no stable direct link tracked here are left as None.
+# repeats the archive slot for compatibility with the existing resolver.
 LOBSTER_FREE_SAMPLE_URLS: dict[str, tuple[str | None, str | None]] = {
-    "AAPL": (None, None),
-    "AMZN": (None, None),
-    "GOOG": (None, None),
-    "INTC": (None, None),
-    "MSFT": (None, None),
-    "SPY": (None, None),
+    symbol: (sample_archive_url(symbol), sample_archive_url(symbol))
+    for symbol in LOBSTER_SAMPLE_SYMBOLS
 }
 
 
@@ -65,8 +60,7 @@ def _manual_download_message(symbol: str, date: str, level: int, data_dir: Path)
 
 def _extract_archive(archive_path: Path, output_dir: Path) -> None:
     if archive_path.suffix == ".zip":
-        with zipfile.ZipFile(archive_path) as archive:
-            archive.extractall(output_dir)
+        _extract_zip(archive_path, output_dir)
         return
     if archive_path.suffix == ".7z":
         tool = shutil.which("7zz") or shutil.which("7z")
