@@ -135,14 +135,14 @@ class LOBSTERReplayer:
                 inventory_path[idx + 1] = inventory
                 continue
 
-            if int(direction[idx]) > 0 and ask <= trade_price:
-                cash += ask
-                inventory -= 1
-                fill_times.append(t)
-                spreads.append(ask - bid)
-            elif int(direction[idx]) < 0 and bid >= trade_price:
+            if int(direction[idx]) > 0 and bid >= trade_price:
                 cash -= bid
                 inventory += 1
+                fill_times.append(t)
+                spreads.append(ask - bid)
+            elif int(direction[idx]) < 0 and ask <= trade_price:
+                cash += ask
+                inventory -= 1
                 fill_times.append(t)
                 spreads.append(ask - bid)
 
@@ -246,19 +246,7 @@ class LOBSTERReplayer:
             current_event = int(event_type[idx])
             current_direction = int(direction[idx])
             if current_event in {4, 5} and event_size > 0:
-                if current_direction > 0 and ask_order.position is not None and ask_order.price is not None and ask_order.price <= trade_price:
-                    if event_size > ask_order.position:
-                        cash += ask
-                        inventory -= 1
-                        fill_times.append(t)
-                        spreads.append(ask - bid)
-                        positions_at_fill.append(ask_order.position)
-                        if ask_order.placed_at is not None:
-                            time_to_fill.append(max(t - ask_order.placed_at, 0.0))
-                        ask_order = _RestingOrder()
-                    else:
-                        ask_order.position = max(ask_order.position - event_size, 0)
-                elif current_direction < 0 and bid_order.position is not None and bid_order.price is not None and bid_order.price >= trade_price:
+                if current_direction > 0 and bid_order.position is not None and bid_order.price is not None and bid_order.price >= trade_price:
                     if event_size > bid_order.position:
                         cash -= bid
                         inventory += 1
@@ -270,6 +258,18 @@ class LOBSTERReplayer:
                         bid_order = _RestingOrder()
                     else:
                         bid_order.position = max(bid_order.position - event_size, 0)
+                elif current_direction < 0 and ask_order.position is not None and ask_order.price is not None and ask_order.price <= trade_price:
+                    if event_size > ask_order.position:
+                        cash += ask
+                        inventory -= 1
+                        fill_times.append(t)
+                        spreads.append(ask - bid)
+                        positions_at_fill.append(ask_order.position)
+                        if ask_order.placed_at is not None:
+                            time_to_fill.append(max(t - ask_order.placed_at, 0.0))
+                        ask_order = _RestingOrder()
+                    else:
+                        ask_order.position = max(ask_order.position - event_size, 0)
             elif current_event in {2, 3} and event_size > 0:
                 if current_direction > 0 and np.isclose(trade_price, best_bid):
                     cancel_volume += event_size

@@ -94,3 +94,33 @@ def test_inventory_aware_quotes_differ_from_symmetric_during_session() -> None:
 
     assert avs_bid < symmetric_bid
     assert avs_ask < symmetric_ask
+
+
+@pytest.mark.parametrize("use_queue_position", [False, True])
+def test_execution_direction_uses_resting_order_side(tmp_path: Path, use_queue_position: bool) -> None:
+    orderbook_file = tmp_path / "direction_orderbook.csv"
+    message_file = tmp_path / "direction_message.csv"
+    orderbook_file.write_text("\n".join(["1010000,1,990000,1"] * 6))
+    message_file.write_text(
+        "\n".join(
+            [
+                "34200.000,1,1,1,1000000,1",
+                "34200.001,4,2,2,990000,1",
+                "34200.002,1,3,1,1000000,1",
+                "34200.003,4,4,2,1010000,-1",
+                "34200.004,2,5,1,990000,1",
+                "34200.005,2,6,1,1010000,-1",
+            ]
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+
+    result = replayer.run_strategy(
+        lambda mid, inventory, t: (99.0, 101.0),
+        use_queue_position=use_queue_position,
+    )
+
+    assert len(result.fill_times) == 2
+    assert result.inventory_path[2] == 1
+    assert result.inventory_path[4] == 0
+    assert result.inventory_path[-1] == 0
