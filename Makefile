@@ -23,7 +23,7 @@ replay:
 	$(PYTHON) -m p2.backtest --config "$(REPLAY_CONFIG)"
 
 research:
-	$(PYTHON) scripts/run_cross_symbol_sweep.py
+	$(PYTHON) -m p2.research --config "$(CONFIG)"
 
 figures:
 	$(PYTHON) scripts/render_readme_figures.py
