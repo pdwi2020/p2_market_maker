@@ -72,6 +72,7 @@ class ReplayConfig(BaseModel):
     use_calibrated_params: bool = False
     session_duration_seconds: float = Field(default=23_400.0, gt=0.0)
     post_only_mode: Literal["reprice", "reject"] = "reprice"
+    latency_ms: float = Field(default=1.0, ge=0.0)
 
 
 class QueueModelConfig(BaseModel):

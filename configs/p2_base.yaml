@@ -40,6 +40,7 @@ replay:
   use_calibrated_params: false
   session_duration_seconds: 23400.0
   post_only_mode: reprice
+  latency_ms: 1.0
 
 queue_model:
   enabled: false

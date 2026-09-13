@@ -71,7 +71,7 @@ def test_replay_passes_elapsed_session_time_to_strategy() -> None:
         observed_times.append(t_session)
         return mid - 0.1, mid + 0.1
 
-    replayer.run_strategy(strategy, session_duration_seconds=23_400.0)
+    replayer.run_strategy(strategy, session_duration_seconds=23_400.0, latency_ms=0.0)
 
     assert observed_times == pytest.approx([0.0, 0.1, 0.2, 0.3])
     assert np.all(23_400.0 - np.asarray(observed_times) > 0.0)
@@ -168,3 +168,34 @@ def test_aapl_replay_has_no_marketable_fills() -> None:
     result = run_lobster_backtest(config)
 
     assert result.marketable_fill_count == 0
+
+
+def test_latency_exposes_stale_quote_to_pickoff(tmp_path: Path) -> None:
+    orderbook_file = tmp_path / "latency_orderbook.csv"
+    message_file = tmp_path / "latency_message.csv"
+    orderbook_file.write_text(
+        "\n".join(
+            [
+                "1010000,5,990000,5",
+                "1000000,5,980000,5",
+                "1000000,5,980000,5",
+            ]
+        )
+    )
+    message_file.write_text(
+        "\n".join(
+            [
+                "34200.000,1,1,1,1000000,1",
+                "34200.001,1,2,1,990000,1",
+                "34200.002,4,3,1,990000,1",
+            ]
+        )
+    )
+    replayer = LOBSTERReplayer().load(orderbook_file, message_file)
+    strategy = lambda mid, inventory, t: (mid - 1.0, mid + 1.0)
+
+    current_result = replayer.run_strategy(strategy, latency_ms=0.0)
+    stale_result = replayer.run_strategy(strategy, latency_ms=1.0)
+
+    assert len(current_result.fill_times) == 0
+    assert len(stale_result.fill_times) == 1

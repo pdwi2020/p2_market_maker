@@ -60,6 +60,7 @@ def run_lobster_backtest(config: P2Config) -> BacktestResult:
         post_only_mode=config.replay.post_only_mode,
         order_size=config.queue_model.order_size,
         cancellation_rule=config.queue_model.cancellation_rule,
+        latency_ms=config.replay.latency_ms,
     )
 
 

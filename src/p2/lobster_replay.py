@@ -110,7 +110,10 @@ class LOBSTERReplayer:
         post_only_mode: Literal["reprice", "reject"] = "reprice",
         order_size: int = 1,
         cancellation_rule: Literal["cancel-from-back", "proportional"] = "proportional",
+        latency_ms: float = 1.0,
     ) -> BacktestResult:
+        if latency_ms < 0.0:
+            raise ValueError("latency_ms must be non-negative")
         if use_queue_position:
             return self._run_queue_aware_strategy(
                 strategy_fn,
@@ -118,14 +121,21 @@ class LOBSTERReplayer:
                 post_only_mode,
                 order_size,
                 cancellation_rule,
+                latency_ms,
             )
-        return self._run_instantaneous_strategy(strategy_fn, session_duration_seconds, post_only_mode)
+        return self._run_instantaneous_strategy(
+            strategy_fn,
+            session_duration_seconds,
+            post_only_mode,
+            latency_ms,
+        )
 
     def _run_instantaneous_strategy(
         self,
         strategy_fn: Callable[[float, int, float], tuple[float, float]],
         session_duration_seconds: float,
         post_only_mode: Literal["reprice", "reject"],
+        latency_ms: float,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
@@ -138,6 +148,7 @@ class LOBSTERReplayer:
         prices = self.messages["price"].to_numpy(dtype=float) if "price" in self.messages else mids
         times = self.messages["time"].to_numpy(dtype=float) if "time" in self.messages else np.arange(len(mids), dtype=float)
         strategy_times = _session_times(times, session_duration_seconds)
+        decision_indices = _decision_indices(times, latency_ms)
         event_type = self.messages["event_type"].to_numpy(dtype=int) if "event_type" in self.messages else np.full(len(mids), 4)
         direction = self.messages["direction"].to_numpy(dtype=int) if "direction" in self.messages else np.zeros(len(mids), dtype=int)
 
@@ -149,17 +160,22 @@ class LOBSTERReplayer:
         spreads: list[float] = []
 
         for idx in range(n_rows):
-            mid = float(mids[idx])
             t = float(strategy_times[idx])
             trade_price = float(prices[idx])
-            bid, ask = strategy_fn(mid, int(inventory), t)
-            bid, ask = _apply_post_only(
-                float(bid),
-                float(ask),
-                best_bid=float(bid_price_pre[idx]),
-                best_ask=float(ask_price_pre[idx]),
-                mode=post_only_mode,
-            )
+            decision_idx = int(decision_indices[idx])
+            bid: float | None = None
+            ask: float | None = None
+            if decision_idx >= 0:
+                decision_mid = float(mids[decision_idx])
+                decision_t = float(strategy_times[decision_idx])
+                bid_quote, ask_quote = strategy_fn(decision_mid, int(inventory), decision_t)
+                bid, ask = _apply_post_only(
+                    float(bid_quote),
+                    float(ask_quote),
+                    best_bid=float(bid_price_pre[decision_idx]),
+                    best_ask=float(ask_price_pre[decision_idx]),
+                    mode=post_only_mode,
+                )
 
             if int(event_type[idx]) not in {4, 5}:
                 inventory_path[idx + 1] = inventory
@@ -196,12 +212,14 @@ class LOBSTERReplayer:
         post_only_mode: Literal["reprice", "reject"],
         order_size: int,
         cancellation_rule: Literal["cancel-from-back", "proportional"],
+        latency_ms: float,
     ) -> BacktestResult:
         if self.orderbook is None or self.messages is None:
             raise RuntimeError("LOBSTER data not loaded. Call load(...) first.")
 
         times = self.messages["time"].to_numpy(dtype=float) if "time" in self.messages else np.arange(len(self.orderbook), dtype=float)
         strategy_times = _session_times(times, session_duration_seconds)
+        decision_indices = _decision_indices(times, latency_ms)
         prices = self.messages["price"].to_numpy(dtype=float) if "price" in self.messages else self.mid_price_series().to_numpy(dtype=float)
         sizes = self.messages["size"].to_numpy(dtype=float) if "size" in self.messages else np.ones(len(self.orderbook), dtype=float)
         event_type = self.messages["event_type"].to_numpy(dtype=int) if "event_type" in self.messages else np.full(len(self.orderbook), 4)
@@ -252,38 +270,41 @@ class LOBSTERReplayer:
         ask_order = _RestingOrder()
 
         for idx in range(n_rows):
-            mid = float(mids[idx])
             t = float(strategy_times[idx])
             trade_price = float(prices[idx])
             event_size = max(int(round(float(sizes[idx]))), 0)
-            bid, ask = strategy_fn(mid, int(inventory), t)
-            best_bid = float(bid_price_pre[idx, 0])
-            best_ask = float(ask_price_pre[idx, 0])
-            bid, ask = _apply_post_only(
-                float(bid),
-                float(ask),
-                best_bid=best_bid,
-                best_ask=best_ask,
-                mode=post_only_mode,
-            )
+            decision_idx = int(decision_indices[idx])
+            bid: float | None = None
+            ask: float | None = None
+            if decision_idx >= 0:
+                decision_mid = float(mids[decision_idx])
+                decision_t = float(strategy_times[decision_idx])
+                bid_quote, ask_quote = strategy_fn(decision_mid, int(inventory), decision_t)
+                bid, ask = _apply_post_only(
+                    float(bid_quote),
+                    float(ask_quote),
+                    best_bid=float(bid_price_pre[decision_idx, 0]),
+                    best_ask=float(ask_price_pre[decision_idx, 0]),
+                    mode=post_only_mode,
+                )
             bid_order = _refresh_order_state(
                 order=bid_order,
                 quote=bid,
-                best_price=best_bid,
-                level_prices=bid_price_pre[idx],
-                level_sizes=bid_size_pre[idx],
+                best_price=float(bid_price_pre[decision_idx, 0]) if decision_idx >= 0 else 0.0,
+                level_prices=bid_price_pre[decision_idx] if decision_idx >= 0 else np.asarray([]),
+                level_sizes=bid_size_pre[decision_idx] if decision_idx >= 0 else np.asarray([]),
                 side="bid",
-                placed_at=t,
+                placed_at=float(strategy_times[decision_idx]) if decision_idx >= 0 else t,
                 order_size=order_size,
             )
             ask_order = _refresh_order_state(
                 order=ask_order,
                 quote=ask,
-                best_price=best_ask,
-                level_prices=ask_price_pre[idx],
-                level_sizes=ask_size_pre[idx],
+                best_price=float(ask_price_pre[decision_idx, 0]) if decision_idx >= 0 else 0.0,
+                level_prices=ask_price_pre[decision_idx] if decision_idx >= 0 else np.asarray([]),
+                level_sizes=ask_size_pre[decision_idx] if decision_idx >= 0 else np.asarray([]),
                 side="ask",
-                placed_at=t,
+                placed_at=float(strategy_times[decision_idx]) if decision_idx >= 0 else t,
                 order_size=order_size,
             )
 
@@ -488,3 +509,11 @@ def _apply_post_only(
     if ask <= best_bid:
         ask = best_ask if mode == "reprice" else None
     return bid, ask
+
+
+def _decision_indices(times: np.ndarray, latency_ms: float) -> np.ndarray:
+    values = np.asarray(times, dtype=float)
+    if values.size == 0:
+        return np.asarray([], dtype=int)
+    activation_cutoff = values - float(latency_ms) / 1_000.0
+    return np.searchsorted(values, activation_cutoff + 1e-12, side="right") - 1
