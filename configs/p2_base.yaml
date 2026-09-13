@@ -2,8 +2,6 @@ run_name: default_synthetic
 
 paths:
   results_dir: results
-  data_dir: data
-  lobster_dir: data/lobster
 
 model:
   sigma: 1.0

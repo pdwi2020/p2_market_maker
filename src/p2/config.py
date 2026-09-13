@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,12 +13,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _environment_path(name: str, default: Path | None = None) -> Path | None:
+    value = os.environ.get(name)
+    if value:
+        return Path(value).expanduser()
+    return default
+
+
 class PathsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     results_dir: Path = Path("results")
-    data_dir: Path = Path("data")
-    lobster_dir: Path = Path("data/lobster")
+    data_dir: Path = Field(default_factory=lambda: _environment_path("P2_DATA_DIR", REPO_ROOT / "data"))
+    lobster_dir: Path | None = None
+    cache_dir: Path = Field(default_factory=lambda: _environment_path("P2_CACHE_DIR", REPO_ROOT / ".cache"))
+    lake_dir: Path | None = Field(default_factory=lambda: _environment_path("P2_LAKE_DIR"))
 
 
 class ModelConfig(BaseModel):
@@ -106,7 +116,13 @@ class P2Config(BaseModel):
     def _resolve_relative_paths(self) -> "P2Config":
         self.paths.results_dir = resolve_path(self.paths.results_dir)
         self.paths.data_dir = resolve_path(self.paths.data_dir)
-        self.paths.lobster_dir = resolve_path(self.paths.lobster_dir)
+        if self.paths.lobster_dir is None:
+            self.paths.lobster_dir = self.paths.data_dir / "lobster"
+        else:
+            self.paths.lobster_dir = resolve_path(self.paths.lobster_dir)
+        self.paths.cache_dir = resolve_path(self.paths.cache_dir)
+        if self.paths.lake_dir is not None:
+            self.paths.lake_dir = resolve_path(self.paths.lake_dir)
         return self
 
     def results_path(self, *parts: str) -> Path:

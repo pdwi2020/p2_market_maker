@@ -2,8 +2,6 @@ run_name: lobster_aapl
 
 paths:
   results_dir: results
-  data_dir: data
-  lobster_dir: data/lobster
 
 model:
   sigma: 1.0
@@ -37,8 +35,8 @@ sweep:
   seed: 123
 
 replay:
-  orderbook_file: data/lobster/AAPL_2012-06-21_34200000_57600000_orderbook_10.csv
-  message_file: data/lobster/AAPL_2012-06-21_34200000_57600000_message_10.csv
+  orderbook_file:
+  message_file:
   use_calibrated_params: true
   session_duration_seconds: 23400.0
   post_only_mode: reprice
