@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -163,3 +163,58 @@ def test_invalid_calibration_dates_are_skipped(
         "date": "2025-07-02",
         "calibration_date": "2025-07-01",
     }
+
+
+def test_selection_day_checkpoints_are_reused_and_invalidated(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    trading_day = date(2025, 5, 2)
+    for day in (trading_day - timedelta(days=1), trading_day):
+        path = tmp_path / "bybit" / "BTCUSDT" / f"{day.isoformat()}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"stream")
+    calls = []
+
+    def fake_selection_day_rows(task):
+        calls.append(task[2])
+        return [
+            {
+                "date": task[2].isoformat(),
+                "strategy": spec.name,
+                "net_pnl": float(index),
+            }
+            for index, spec in enumerate(research_study.strategy_candidates())
+        ]
+
+    monkeypatch.setattr(
+        research_study,
+        "_selection_day_rows",
+        fake_selection_day_rows,
+    )
+
+    first = research_study.run_selection(
+        tmp_path,
+        cancellation_rule="proportional",
+        selection_dates=(trading_day,),
+    )
+    second = research_study.run_selection(
+        tmp_path,
+        cancellation_rule="proportional",
+        selection_dates=(trading_day,),
+    )
+
+    assert calls == [trading_day]
+    assert first.strategies == second.strategies
+
+    current_stream = (
+        tmp_path / "bybit" / "BTCUSDT" / f"{trading_day.isoformat()}.parquet"
+    )
+    current_stream.write_bytes(b"changed stream")
+    research_study.run_selection(
+        tmp_path,
+        cancellation_rule="proportional",
+        selection_dates=(trading_day,),
+    )
+
+    assert calls == [trading_day, trading_day]

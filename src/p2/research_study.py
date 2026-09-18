@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
+import json
+import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
+from functools import lru_cache
+from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence, TypeVar, cast
 
 import numpy as np
 import pandas as pd
@@ -34,6 +38,10 @@ MAKER_FEE_RATES = (0.0002, 0.0001, 0.0, -0.00005)
 LATENCIES_MS = (10, 50, 200)
 PRIMARY_MAKER_FEE_RATE = 0.0002
 PRIMARY_LATENCY_MS = 50
+CHECKPOINT_SCHEMA_VERSION = 1
+
+TaskT = TypeVar("TaskT")
+ResultT = TypeVar("ResultT")
 
 DAILY_COLUMNS = (
     "study",
@@ -206,6 +214,164 @@ def _stream_path(cache_dir: str | Path, symbol: str, day: date) -> Path:
     return Path(cache_dir) / "bybit" / symbol / f"{day.isoformat()}.parquet"
 
 
+@lru_cache(maxsize=1)
+def _replay_fingerprint() -> str:
+    digest = sha256()
+    source_dir = Path(__file__).parent
+    for name in ("research_study.py", "bybit_replay.py", "research_models.py"):
+        digest.update((source_dir / name).read_bytes())
+    digest.update(sys.version.encode())
+    digest.update(np.__version__.encode())
+    return digest.hexdigest()
+
+
+def _file_signature(path: Path) -> dict[str, int | str]:
+    stat = path.stat()
+    return {
+        "path": path.name,
+        "size": stat.st_size,
+        "modified_ns": stat.st_mtime_ns,
+    }
+
+
+def _checkpoint_spec(
+    cache_dir: Path,
+    *,
+    stage: str,
+    cancellation_rule: CancellationRule,
+    symbol: str,
+    trading_day: date,
+    strategies: Sequence[StrategySpec],
+) -> tuple[Path, dict[str, object]]:
+    calibration_day = trading_day - timedelta(days=1)
+    fingerprint = _replay_fingerprint()
+    path = (
+        cache_dir
+        / "research"
+        / f"checkpoints-{fingerprint[:16]}"
+        / stage
+        / cancellation_rule
+        / symbol
+        / f"{trading_day.isoformat()}.json"
+    )
+    metadata: dict[str, object] = {
+        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "fingerprint": fingerprint,
+        "stage": stage,
+        "cancellation_rule": cancellation_rule,
+        "symbol": symbol,
+        "date": trading_day.isoformat(),
+        "calibration_date": calibration_day.isoformat(),
+        "strategies": [asdict(spec) for spec in strategies],
+        "inputs": [
+            _file_signature(_stream_path(cache_dir, symbol, calibration_day)),
+            _file_signature(_stream_path(cache_dir, symbol, trading_day)),
+        ],
+    }
+    return path, metadata
+
+
+def _read_checkpoint(
+    path: Path,
+    expected_metadata: dict[str, object],
+) -> tuple[bool, object]:
+    if not path.is_file():
+        return False, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, None
+    if not isinstance(payload, dict):
+        return False, None
+    if payload.get("metadata") != expected_metadata or "result" not in payload:
+        return False, None
+    return True, payload["result"]
+
+
+def _write_checkpoint(
+    path: Path,
+    metadata: dict[str, object],
+    result: object,
+) -> object:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    serialized = json.dumps(
+        {"metadata": metadata, "result": result},
+        allow_nan=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    temporary.write_text(serialized, encoding="utf-8")
+    temporary.replace(path)
+    return json.loads(serialized)["result"]
+
+
+def _execute_checkpointed(
+    tasks: Sequence[TaskT],
+    specs: Sequence[tuple[Path, dict[str, object]]],
+    worker: Callable[[TaskT], ResultT],
+    *,
+    workers: int,
+    stage: str,
+) -> list[ResultT]:
+    missing = object()
+    results: list[object] = [missing] * len(tasks)
+    pending: list[tuple[int, TaskT, Path, dict[str, object]]] = []
+    for index, (task, (path, metadata)) in enumerate(
+        zip(tasks, specs, strict=True)
+    ):
+        found, result = _read_checkpoint(path, metadata)
+        if found:
+            results[index] = result
+        else:
+            pending.append((index, task, path, metadata))
+    completed = len(tasks) - len(pending)
+    print(
+        json.dumps(
+            {
+                "stage": stage,
+                "total": len(tasks),
+                "cached": completed,
+                "pending": len(pending),
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+    def store(
+        item: tuple[int, TaskT, Path, dict[str, object]],
+        result: ResultT,
+    ) -> None:
+        nonlocal completed
+        index, _, path, metadata = item
+        results[index] = _write_checkpoint(path, metadata, result)
+        completed += 1
+        if completed % 10 == 0 or completed == len(tasks):
+            print(
+                json.dumps(
+                    {"stage": stage, "completed": completed, "total": len(tasks)},
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+    if workers == 1:
+        for item in pending:
+            store(item, worker(item[1]))
+    elif pending:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(worker, item[1]): item
+                for item in pending
+            }
+            for future in as_completed(futures):
+                store(futures[future], future.result())
+    if any(result is missing for result in results):
+        raise RuntimeError("research checkpoint execution is incomplete")
+    return cast(list[ResultT], results)
+
+
 def run_selection(
     cache_dir: str | Path,
     *,
@@ -228,11 +394,24 @@ def run_selection(
         (Path(cache_dir), cancellation_rule, trading_day)
         for trading_day in selection_dates
     ]
-    if workers == 1:
-        daily_rows = [_selection_day_rows(task) for task in tasks]
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            daily_rows = list(executor.map(_selection_day_rows, tasks))
+    specs = [
+        _checkpoint_spec(
+            task[0],
+            stage="selection",
+            cancellation_rule=cancellation_rule,
+            symbol="BTCUSDT",
+            trading_day=task[2],
+            strategies=strategy_candidates(),
+        )
+        for task in tasks
+    ]
+    daily_rows = _execute_checkpointed(
+        tasks,
+        specs,
+        _selection_day_rows,
+        workers=workers,
+        stage="selection",
+    )
     valid_rows = [day_rows for day_rows in daily_rows if day_rows is not None]
     if not valid_rows:
         raise ValueError("no valid BTCUSDT selection calibrations are available")
@@ -436,11 +615,24 @@ def run_crypto_study(
         for symbol, dates in test_dates.items()
         for trading_day in dates
     ]
-    if workers == 1:
-        result_rows = [_test_day_rows(task) for task in tasks]
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            result_rows = list(executor.map(_test_day_rows, tasks))
+    specs = [
+        _checkpoint_spec(
+            task[0],
+            stage="test",
+            cancellation_rule=cancellation_rule,
+            symbol=task[1],
+            trading_day=task[2],
+            strategies=task[3],
+        )
+        for task in tasks
+    ]
+    result_rows = _execute_checkpointed(
+        tasks,
+        specs,
+        _test_day_rows,
+        workers=workers,
+        stage="test",
+    )
     daily_rows = [row for result in result_rows for row in result[0]]
     decomposition_rows = [row for result in result_rows for row in result[1]]
     markout_rows = [row for result in result_rows for row in result[2]]
