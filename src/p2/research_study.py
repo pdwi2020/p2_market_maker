@@ -94,6 +94,7 @@ class SelectionResult:
     strategies: tuple[StrategySpec, ...]
     trial_sharpes: tuple[float, ...]
     daily_pnl: pd.DataFrame
+    skipped_dates: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,7 +167,11 @@ def _family(spec: StrategySpec) -> str:
     return spec.kind
 
 
-def select_strategies(selection_daily: pd.DataFrame) -> SelectionResult:
+def select_strategies(
+    selection_daily: pd.DataFrame,
+    *,
+    skipped_dates: Sequence[str] = (),
+) -> SelectionResult:
     """Apply the locked family-wise Sharpe and tie-breaking rule."""
     candidates = strategy_candidates()
     stats: dict[str, tuple[float, float]] = {}
@@ -193,6 +198,7 @@ def select_strategies(selection_daily: pd.DataFrame) -> SelectionResult:
         strategies=tuple(selected),
         trial_sharpes=trial_sharpes,
         daily_pnl=selection_daily.copy(),
+        skipped_dates=tuple(skipped_dates),
     )
 
 
@@ -227,18 +233,29 @@ def run_selection(
     else:
         with ProcessPoolExecutor(max_workers=workers) as executor:
             daily_rows = list(executor.map(_selection_day_rows, tasks))
-    rows = [row for day_rows in daily_rows for row in day_rows]
-    return select_strategies(pd.DataFrame(rows))
+    valid_rows = [day_rows for day_rows in daily_rows if day_rows is not None]
+    if not valid_rows:
+        raise ValueError("no valid BTCUSDT selection calibrations are available")
+    rows = [row for day_rows in valid_rows for row in day_rows]
+    skipped_dates = [
+        task[2].isoformat()
+        for task, day_rows in zip(tasks, daily_rows, strict=True)
+        if day_rows is None
+    ]
+    return select_strategies(pd.DataFrame(rows), skipped_dates=skipped_dates)
 
 
 def _selection_day_rows(
     task: tuple[Path, CancellationRule, date],
-) -> list[dict[str, object]]:
+) -> list[dict[str, object]] | None:
     cache_dir, cancellation_rule, trading_day = task
     calibration_day = trading_day - timedelta(days=1)
-    calibration = calibrate_bybit_day(
-        _stream_path(cache_dir, "BTCUSDT", calibration_day)
-    )
+    try:
+        calibration = calibrate_bybit_day(
+            _stream_path(cache_dir, "BTCUSDT", calibration_day)
+        )
+    except ValueError:
+        return None
     events = load_bybit_events(_stream_path(cache_dir, "BTCUSDT", trading_day))
     settings = ReplaySettings(
         maker_fee_rate=PRIMARY_MAKER_FEE_RATE,
@@ -427,6 +444,9 @@ def run_crypto_study(
     daily_rows = [row for result in result_rows for row in result[0]]
     decomposition_rows = [row for result in result_rows for row in result[1]]
     markout_rows = [row for result in result_rows for row in result[2]]
+    skipped_test_dates = [
+        result[3] for result in result_rows if result[3] is not None
+    ]
     daily_pnl = pd.DataFrame(daily_rows, columns=DAILY_COLUMNS)
     decomposition = pd.DataFrame(decomposition_rows, columns=DECOMPOSITION_COLUMNS)
     markouts = pd.DataFrame(markout_rows, columns=MARKOUT_COLUMNS)
@@ -440,6 +460,8 @@ def run_crypto_study(
     summary: dict[str, object] = {
         "selection_trial_count": len(strategy_candidates()),
         "selection_dates": sorted(selection.daily_pnl["date"].unique().tolist()),
+        "skipped_selection_dates": list(selection.skipped_dates),
+        "skipped_test_dates": skipped_test_dates,
         "selection_trial_sharpes": [
             {"strategy": spec.name, "annualized_sharpe": sharpe}
             for spec, sharpe in zip(
@@ -471,12 +493,25 @@ def _test_day_rows(
     list[dict[str, object]],
     list[dict[str, object]],
     list[dict[str, object]],
+    dict[str, str] | None,
 ]:
     cache_dir, symbol, trading_day, strategies, cancellation_rule = task
     calibration_day = trading_day - timedelta(days=1)
-    calibration = calibrate_bybit_day(
-        _stream_path(cache_dir, symbol, calibration_day)
-    )
+    try:
+        calibration = calibrate_bybit_day(
+            _stream_path(cache_dir, symbol, calibration_day)
+        )
+    except ValueError:
+        return (
+            [],
+            [],
+            [],
+            {
+                "symbol": symbol,
+                "date": trading_day.isoformat(),
+                "calibration_date": calibration_day.isoformat(),
+            },
+        )
     events = load_bybit_events(_stream_path(cache_dir, symbol, trading_day))
     daily_rows: list[dict[str, object]] = []
     decomposition_rows: list[dict[str, object]] = []
@@ -504,4 +539,4 @@ def _test_day_rows(
             daily_rows.extend(daily)
             decomposition_rows.extend(decomposition)
             markout_rows.extend(markouts)
-    return daily_rows, decomposition_rows, markout_rows
+    return daily_rows, decomposition_rows, markout_rows, None

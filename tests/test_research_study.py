@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import p2.research_study as research_study
 from p2.bybit_replay import (
     CryptoFill,
     DailyReplayResult,
@@ -123,3 +124,42 @@ def test_fee_grid_is_derived_per_fill_and_reconciles() -> None:
     )
     assert markouts[0]["mean_markout"] == pytest.approx(0.001)
     assert np.isnan(markouts[1]["mean_markout"])
+
+
+def test_invalid_calibration_dates_are_skipped(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def invalid_calibration(path):
+        del path
+        raise ValueError("invalid calibration")
+
+    monkeypatch.setattr(
+        research_study,
+        "calibrate_bybit_day",
+        invalid_calibration,
+    )
+    trading_day = date(2025, 7, 2)
+
+    selection_rows = research_study._selection_day_rows(
+        (tmp_path, "proportional", trading_day)
+    )
+    daily, decomposition, markouts, skipped = research_study._test_day_rows(
+        (
+            tmp_path,
+            "SOLUSDT",
+            trading_day,
+            (StrategySpec("symmetric"),),
+            "proportional",
+        )
+    )
+
+    assert selection_rows is None
+    assert daily == []
+    assert decomposition == []
+    assert markouts == []
+    assert skipped == {
+        "symbol": "SOLUSDT",
+        "date": "2025-07-02",
+        "calibration_date": "2025-07-01",
+    }
