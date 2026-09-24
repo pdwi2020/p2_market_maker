@@ -78,6 +78,20 @@ That is adverse selection measured directly rather than assumed.
 Signed markouts are negative at every horizon for every strategy and most of the
 damage is done within one second.
 
+Inventory revaluation is the largest single negative term, and the reason is
+visible in the end-of-day position:
+
+![End-of-day inventory distribution](results/published/inventory_distribution.png)
+
+End-of-day inventory has a median near zero and spans nearly the whole
+permitted band over the 301 days, but it rarely closes at a bound: the
+symmetric quoter finishes within a tick of the cap on 2 days out of 301.
+Intraday is a different matter. Mean absolute inventory is 0.027 BTC against a
+0.05 cap, so the symmetric quoter carries about **54%** of its permitted
+position on average, and all three active strategies touch the cap at some
+point on most days. The loss therefore comes from continuously marking a
+position that is roughly half the bound, not from ending the day exposed.
+
 ### How much of this is the queue model?
 
 The crypto book is level-two data, so queue position is modelled rather than
