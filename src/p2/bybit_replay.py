@@ -25,7 +25,7 @@ from p2.research_models import (
 
 
 StrategyKind = Literal["symmetric", "as", "glft", "glft_imbalance"]
-CancellationRule = Literal["cancel-from-back", "proportional"]
+CancellationRule = Literal["cancel-from-back", "proportional", "trades-only"]
 
 # Where a quote sits relative to the reconstructed book at placement time.
 #   "displayed"   the price carries displayed size, so we join behind it;
@@ -73,7 +73,11 @@ class ReplaySettings:
             raise ValueError("sizes, tick, requote interval, and inventory limit must be positive")
         if self.latency_ms < 0:
             raise ValueError("latency_ms must be nonnegative")
-        if self.cancellation_rule not in {"cancel-from-back", "proportional"}:
+        if self.cancellation_rule not in {
+            "cancel-from-back",
+            "proportional",
+            "trades-only",
+        }:
             raise ValueError("unsupported cancellation rule")
 
 
@@ -342,12 +346,16 @@ def _update_queue(
         order.market_size = new_size
         order.placement = "displayed"
         return
+    # Traded volume is charged to the queue when the trade is processed, so any
+    # size lost between book snapshots is cancellation. "trades-only" grants no
+    # credit for it, which is the assumption the external engine's risk-adverse
+    # queue model makes and the reference point for the cross-check.
     reduction = max(order.market_size - new_size, 0.0)
     if reduction > 0.0 and order.ahead > 0.0:
         if settings.cancellation_rule == "cancel-from-back":
             behind = max(order.market_size - order.ahead, 0.0)
             order.ahead = max(order.ahead - max(reduction - behind, 0.0), 0.0)
-        elif order.market_size > 0.0:
+        elif settings.cancellation_rule == "proportional" and order.market_size > 0.0:
             order.ahead *= max(1.0 - reduction / order.market_size, 0.0)
     order.market_size = new_size
 

@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from p2.data.mbo import LAST_EVENT_FLAG
-from p2.queue_validation import METHODS, validate_es_queues
+from p2.queue_validation import ARMS, METHODS, SELECTION_ARM, validate_es_queues
 
 
 BASE = pd.Timestamp("2025-01-06 14:30:00", tz="UTC")
@@ -47,7 +47,10 @@ def test_single_pass_validation_reports_all_methods(tmp_path: Path) -> None:
 
     result = validate_es_queues(source, dates=("2025-01-06",))
 
-    aggregate = result.table[result.table["date"] == "ALL"]
+    aggregate = result.table[
+        (result.table["date"] == "ALL")
+        & (result.table["arm"] == SELECTION_ARM)
+    ]
     assert set(aggregate["method"]) == set(METHODS)
     assert set(aggregate["fill_count"]) == {1}
     assert set(aggregate["gross_pnl"]) == {25.0}
@@ -55,3 +58,22 @@ def test_single_pass_validation_reports_all_methods(tmp_path: Path) -> None:
     assert aggregate.loc[
         aggregate["method"] == "l2_proportional", "selected_rule"
     ].item()
+
+
+def test_validation_covers_every_arm_the_crypto_study_uses(tmp_path: Path) -> None:
+    source = tmp_path / "es.parquet"
+    _write_validation_fixture(source)
+
+    table = validate_es_queues(source, dates=("2025-01-06",)).table
+
+    assert set(table["arm"]) == {arm.name for arm in ARMS}
+    for arm in ARMS:
+        scoped = table[(table["arm"] == arm.name) & (table["date"] == "ALL")]
+        assert set(scoped["method"]) == set(METHODS)
+        assert set(scoped["latency_ms"]) == {arm.latency_ms}
+        assert set(scoped["offset_ticks"]) == {arm.offset_ticks}
+    # The rule is selected on the preregistered arm and then flagged everywhere,
+    # so off-touch rows cannot influence which cancellation rule is chosen.
+    marked = set(table.loc[table["selected_rule"], "method"])
+    assert marked == {"l2_proportional"}
+    assert SELECTION_ARM in set(table["arm"])

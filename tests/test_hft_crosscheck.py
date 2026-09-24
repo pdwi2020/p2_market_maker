@@ -5,6 +5,8 @@ import pytest
 
 from p2.bybit_replay import BybitEventArrays
 from p2.hft_crosscheck import (
+    EXTERNAL_QUEUE_MODEL,
+    MATCHED_NATIVE_RULE,
     ExternalReplayResult,
     comparison_row,
     normalize_bybit_events,
@@ -94,3 +96,24 @@ def test_crosscheck_row_reports_absolute_and_relative_differences() -> None:
     assert row["relative_difference_fill_count"] == pytest.approx(0.2)
     assert row["absolute_difference_net_pnl"] == pytest.approx(0.5)
     assert row["relative_difference_net_pnl"] == pytest.approx(0.5)
+
+
+def test_comparison_row_records_both_queue_models() -> None:
+    row = comparison_row(
+        trading_date="2025-07-07",
+        strategy="symmetric",
+        native={"fill_count": 10, "filled_volume": 0.1, "net_pnl": -1.0},
+        external=ExternalReplayResult(
+            fill_count=11,
+            filled_volume=0.11,
+            gross_pnl=-1.0,
+            fees=0.1,
+            net_pnl=-1.1,
+            end_inventory=0.0,
+        ),
+        package_version="2.4.4",
+    )
+
+    assert row["native_queue_model"] == MATCHED_NATIVE_RULE
+    assert row["external_queue_model"] == EXTERNAL_QUEUE_MODEL
+    assert row["matched_queue_model"] is True

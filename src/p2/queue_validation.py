@@ -33,6 +33,28 @@ METHODS = ("exact_fifo", "l2_cancel_from_back", "l2_proportional")
 
 
 @dataclass(frozen=True, slots=True)
+class _Arm:
+    """One quoting configuration evaluated by every queue method."""
+
+    name: str
+    offset_ticks: int
+    latency_ms: int
+
+
+# The first arm is the preregistered one and is the only arm the cancellation
+# rule is selected on. The others exist because the crypto study quotes away
+# from the touch at 50 ms, and a validation that never leaves the touch says
+# nothing about the paths that study actually uses.
+ARMS = (
+    _Arm("touch_10ms", 0, 10),
+    _Arm("touch_50ms", 0, 50),
+    _Arm("off_2_ticks_50ms", 2, 50),
+    _Arm("off_8_ticks_50ms", 8, 50),
+)
+SELECTION_ARM = ARMS[0].name
+
+
+@dataclass(frozen=True, slots=True)
 class QueueValidationFill:
     """One counterfactual ES fill."""
 
@@ -75,6 +97,9 @@ class _QuoteCommand:
 class _MethodState:
     method: str
     cancellation_rule: CancellationRule | None
+    arm: str = SELECTION_ARM
+    offset_ticks: int = 0
+    latency_ns: int = 10_000_000
     commands: deque[_QuoteCommand] = field(default_factory=deque)
     bid_order: _ExactOrder | _LevelOrder | None = None
     ask_order: _ExactOrder | _LevelOrder | None = None
@@ -94,6 +119,9 @@ class _MethodState:
 @dataclass(frozen=True)
 class _MethodResult:
     date: str
+    arm: str
+    offset_ticks: int
+    latency_ms: int
     method: str
     fills: tuple[QueueValidationFill, ...]
     gross_pnl: float
@@ -206,21 +234,55 @@ def _record_fill(
         state.submitted_ask = None
 
 
+def _consume_ahead(order: _ExactOrder | _LevelOrder, volume: float) -> float:
+    """Charge aggressor volume to the queue ahead and return what passes us."""
+    if isinstance(order, _ExactOrder):
+        residual = volume
+        for order_id in list(order.ahead):
+            taken = min(float(order.ahead[order_id]), residual)
+            remaining = order.ahead[order_id] - taken
+            if remaining <= 0:
+                del order.ahead[order_id]
+            else:
+                order.ahead[order_id] = int(remaining)
+            residual -= taken
+            if residual <= 0.0:
+                return 0.0
+        return residual
+    consumed = min(order.ahead, volume)
+    order.ahead -= consumed
+    return volume - consumed
+
+
 def _process_fill_record(state: _MethodState, record: MBORecord) -> None:
+    """Apply the same at-or-through volume rule the crypto replay uses.
+
+    A fill printing past our price can only have reached there by clearing the
+    queue ahead of us, and it can only fill what it actually traded. Handling
+    the two cases alike is what lets these rows speak to the crypto engine
+    rather than to a rule only this module implements.
+    """
     if record.action != "F":
         return
     side = normalize_side(record.side)
     order = state.bid_order if side == "B" else state.ask_order
-    if order is None or record.price != order.price:
+    if order is None:
         return
-    if isinstance(order, _ExactOrder):
-        if record.order_id not in order.ahead and not order.ahead:
-            _record_fill(state, order, record.index_ns)
+    at_price = record.price == order.price
+    through = (
+        order.side == "B" and record.price < order.price
+    ) or (order.side == "A" and record.price > order.price)
+    if not (at_price or through):
         return
-    consumed_ahead = min(order.ahead, record.size)
-    order.ahead -= consumed_ahead
-    order.market_size = max(order.market_size - record.size, 0.0)
-    if record.size - consumed_ahead >= 1.0:
+    if isinstance(order, _ExactOrder) and record.order_id in order.ahead:
+        # This maker sits ahead of us; its own cancel record drains the queue.
+        return
+    residual = _consume_ahead(order, float(record.size))
+    if isinstance(order, _LevelOrder):
+        order.market_size = (
+            0.0 if through else max(order.market_size - record.size, 0.0)
+        )
+    if residual >= 1.0:
         _record_fill(state, order, record.index_ns)
 
 
@@ -289,28 +351,50 @@ def _update_level_orders(
 def _submit_quotes(state: _MethodState, now_ns: int, book: MBOBook) -> None:
     if now_ns - state.last_decision_ns < 100_000_000:
         return
-    bid = book.best_bid if state.inventory < 5 else None
-    ask = book.best_ask if state.inventory > -5 else None
+    if state.offset_ticks == 0:
+        raw_bid, raw_ask = book.best_bid, book.best_ask
+    else:
+        midpoint = 0.5 * (book.best_bid + book.best_ask)
+        offset = state.offset_ticks * ES_TICK_SIZE
+        raw_bid = float(
+            np.floor((midpoint - offset) / ES_TICK_SIZE + 1e-9) * ES_TICK_SIZE
+        )
+        raw_ask = float(
+            np.ceil((midpoint + offset) / ES_TICK_SIZE - 1e-9) * ES_TICK_SIZE
+        )
+    bid = raw_bid if state.inventory < 5 else None
+    ask = raw_ask if state.inventory > -5 else None
     if bid != state.submitted_bid or ask != state.submitted_ask:
-        state.commands.append(_QuoteCommand(now_ns + 10_000_000, bid, ask))
+        state.commands.append(_QuoteCommand(now_ns + state.latency_ns, bid, ask))
         state.submitted_bid = bid
         state.submitted_ask = ask
     state.last_decision_ns = now_ns
 
 
-def _new_states() -> dict[str, _MethodState]:
+_RULES: dict[str, CancellationRule | None] = {
+    "exact_fifo": None,
+    "l2_cancel_from_back": "cancel-from-back",
+    "l2_proportional": "proportional",
+}
+
+
+def _new_states() -> dict[tuple[str, str], _MethodState]:
     return {
-        "exact_fifo": _MethodState("exact_fifo", None),
-        "l2_cancel_from_back": _MethodState(
-            "l2_cancel_from_back", "cancel-from-back"
-        ),
-        "l2_proportional": _MethodState("l2_proportional", "proportional"),
+        (arm.name, method): _MethodState(
+            method,
+            _RULES[method],
+            arm=arm.name,
+            offset_ticks=arm.offset_ticks,
+            latency_ns=arm.latency_ms * 1_000_000,
+        )
+        for arm in ARMS
+        for method in METHODS
     }
 
 
 def _finish_day(
     day: str,
-    states: dict[str, _MethodState],
+    states: dict[tuple[str, str], _MethodState],
     end_ns: int,
 ) -> list[_MethodResult]:
     output: list[_MethodResult] = []
@@ -324,6 +408,9 @@ def _finish_day(
         output.append(
             _MethodResult(
                 date=day,
+                arm=state.arm,
+                offset_ticks=state.offset_ticks,
+                latency_ms=state.latency_ns // 1_000_000,
                 method=state.method,
                 fills=tuple(state.fills),
                 gross_pnl=float(gross_pnl),
@@ -345,10 +432,20 @@ def _ks_distance(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.max(np.abs(left_cdf - right_cdf)))
 
 
-def _combine(results: Sequence[_MethodResult], method: str) -> _MethodResult:
-    selected = [result for result in results if result.method == method]
+def _combine(
+    results: Sequence[_MethodResult], arm: str, method: str
+) -> _MethodResult:
+    selected = [
+        result
+        for result in results
+        if result.method == method and result.arm == arm
+    ]
+    template = selected[0]
     return _MethodResult(
         date="ALL",
+        arm=arm,
+        offset_ticks=template.offset_ticks,
+        latency_ms=template.latency_ms,
         method=method,
         fills=tuple(fill for result in selected for fill in result.fills),
         gross_pnl=float(sum(result.gross_pnl for result in selected)),
@@ -366,71 +463,89 @@ def _combine(results: Sequence[_MethodResult], method: str) -> _MethodResult:
 def _validation_rows(results: Sequence[_MethodResult]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     scopes = sorted({result.date for result in results}) + ["ALL"]
-    for scope in scopes:
-        scoped = (
-            [_combine(results, method) for method in METHODS]
-            if scope == "ALL"
-            else [result for result in results if result.date == scope]
-        )
-        exact = next(result for result in scoped if result.method == "exact_fifo")
-        exact_times = np.asarray(
+    for arm in ARMS:
+        for scope in scopes:
+            rows.extend(_arm_rows(results, arm.name, scope))
+    return rows
+
+
+def _arm_rows(
+    results: Sequence[_MethodResult], arm: str, scope: str
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    scoped = (
+        [_combine(results, arm, method) for method in METHODS]
+        if scope == "ALL"
+        else [
+            result
+            for result in results
+            if result.date == scope and result.arm == arm
+        ]
+    )
+    exact = next(result for result in scoped if result.method == "exact_fifo")
+    exact_times = np.asarray(
+        [
+            (fill.time_ns - fill.activated_ns) / 1_000_000.0
+            for fill in exact.fills
+        ]
+    )
+    for result in scoped:
+        fill_times = np.asarray(
             [
                 (fill.time_ns - fill.activated_ns) / 1_000_000.0
-                for fill in exact.fills
+                for fill in result.fills
             ]
         )
-        for result in scoped:
-            fill_times = np.asarray(
-                [
-                    (fill.time_ns - fill.activated_ns) / 1_000_000.0
-                    for fill in result.fills
-                ]
+        if result.method == "exact_fifo":
+            relative_bias = 0.0
+            ks = 0.0
+            pnl_error = 0.0
+        else:
+            relative_bias = (
+                (len(result.fills) - len(exact.fills)) / len(exact.fills)
+                if exact.fills
+                else np.nan
             )
-            if result.method == "exact_fifo":
-                relative_bias = 0.0
-                ks = 0.0
-                pnl_error = 0.0
-            else:
-                relative_bias = (
-                    (len(result.fills) - len(exact.fills)) / len(exact.fills)
-                    if exact.fills
-                    else np.nan
-                )
-                ks = _ks_distance(fill_times, exact_times)
-                pnl_error = result.gross_pnl - exact.gross_pnl
-            row: dict[str, object] = {
-                "study": "es_queue",
-                "symbol": "ES.c.0",
-                "date": scope,
-                "method": result.method,
-                "fill_count": len(result.fills),
-                "filled_volume": float(len(result.fills)),
-                "fill_time_mean_ms": (
-                    float(np.mean(fill_times)) if len(fill_times) else np.nan
-                ),
-                "fill_time_median_ms": (
-                    float(np.median(fill_times)) if len(fill_times) else np.nan
-                ),
-                "fill_time_p95_ms": (
-                    float(np.quantile(fill_times, 0.95)) if len(fill_times) else np.nan
-                ),
-                "fill_count_relative_bias": relative_bias,
-                "fill_time_ks": ks,
-                "gross_pnl": result.gross_pnl,
-                "gross_pnl_error": pnl_error,
-            }
-            for horizon in MARKOUT_HORIZONS:
-                values = result.markouts[horizon]
-                row[f"markout_{horizon}s"] = (
-                    float(np.mean(values)) if values else np.nan
-                )
-            rows.append(row)
+            ks = _ks_distance(fill_times, exact_times)
+            pnl_error = result.gross_pnl - exact.gross_pnl
+        row: dict[str, object] = {
+            "study": "es_queue",
+            "symbol": "ES.c.0",
+            "date": scope,
+            "arm": result.arm,
+            "offset_ticks": result.offset_ticks,
+            "latency_ms": result.latency_ms,
+            "method": result.method,
+            "fill_count": len(result.fills),
+            "filled_volume": float(len(result.fills)),
+            "fill_time_mean_ms": (
+                float(np.mean(fill_times)) if len(fill_times) else np.nan
+            ),
+            "fill_time_median_ms": (
+                float(np.median(fill_times)) if len(fill_times) else np.nan
+            ),
+            "fill_time_p95_ms": (
+                float(np.quantile(fill_times, 0.95)) if len(fill_times) else np.nan
+            ),
+            "fill_count_relative_bias": relative_bias,
+            "fill_time_ks": ks,
+            "gross_pnl": result.gross_pnl,
+            "gross_pnl_error": pnl_error,
+        }
+        for horizon in MARKOUT_HORIZONS:
+            values = result.markouts[horizon]
+            row[f"markout_{horizon}s"] = (
+                float(np.mean(values)) if values else np.nan
+            )
+        rows.append(row)
     return rows
 
 
 def select_cancellation_rule(table: pd.DataFrame) -> CancellationRule:
     """Apply the locked aggregate queue-model selection rule."""
-    aggregate = table[table["date"] == "ALL"]
+    aggregate = table[
+        (table["date"] == "ALL") & (table["arm"] == SELECTION_ARM)
+    ]
     candidates = aggregate[aggregate["method"] != "exact_fifo"]
     if len(candidates) != 2:
         raise ValueError("queue validation requires both level-two methods")

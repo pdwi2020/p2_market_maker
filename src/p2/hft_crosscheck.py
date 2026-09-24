@@ -12,10 +12,25 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from p2.bybit_replay import BybitEventArrays, StrategySpec, load_bybit_events
+from p2.bybit_replay import (
+    BybitEventArrays,
+    CancellationRule,
+    ReplaySettings,
+    StrategySpec,
+    load_bybit_events,
+    replay_bybit_day,
+)
 from p2.research_models import DailyCalibration, calibrate_bybit_day, glft_quotes
 from p2.research_study import PRIMARY_LATENCY_MS, PRIMARY_MAKER_FEE_RATE
 
+
+# hftbacktest's risk-adverse queue model advances a resting order only on
+# traded volume, never on cancellations at its level. The native engine's
+# "trades-only" rule makes exactly that assumption, so the two engines can be
+# compared on the same terms. Running the study's own rule against it would
+# measure the distance between two queue assumptions instead.
+MATCHED_NATIVE_RULE: CancellationRule = "trades-only"
+EXTERNAL_QUEUE_MODEL = "risk_adverse"
 
 CROSSCHECK_DATES = (
     "2025-07-07",
@@ -296,6 +311,9 @@ def comparison_row(
         "date": trading_date,
         "strategy": strategy,
         "package_version": package_version,
+        "native_queue_model": MATCHED_NATIVE_RULE,
+        "external_queue_model": EXTERNAL_QUEUE_MODEL,
+        "matched_queue_model": True,
     }
     for metric in ("fill_count", "filled_volume", "net_pnl"):
         native_value = float(native[metric])
@@ -316,10 +334,21 @@ def run_hft_crosscheck(
     *,
     dates: Sequence[str] = CROSSCHECK_DATES,
 ) -> pd.DataFrame:
-    """Run the two locked strategies on all five cross-check dates."""
+    """Compare both engines on the two locked strategies, queue models matched.
+
+    The native side is re-run here under ``MATCHED_NATIVE_RULE`` rather than
+    read from the study table, because the study's cancellation rule credits
+    cancellations that the external engine ignores. The study's own numbers are
+    carried alongside as context so the cost of that assumption stays visible.
+    """
     hft = _bindings()
     symmetric = next(spec for spec in selected_strategies if spec.kind == "symmetric")
     selected_glft = next(spec for spec in selected_strategies if spec.kind == "glft")
+    settings = ReplaySettings(
+        maker_fee_rate=PRIMARY_MAKER_FEE_RATE,
+        latency_ms=PRIMARY_LATENCY_MS,
+        cancellation_rule=MATCHED_NATIVE_RULE,
+    )
     rows: list[dict[str, object]] = []
     for date_value in dates:
         trading_day = date.fromisoformat(date_value)
@@ -332,14 +361,23 @@ def run_hft_crosscheck(
             / f"{calibration_day.isoformat()}.parquet"
         )
         calibration = calibrate_bybit_day(calibration_path)
-        normalized = normalize_bybit_events(load_bybit_events(trading_path), hft)
+        events = load_bybit_events(trading_path)
+        normalized = normalize_bybit_events(events, hft)
         for strategy in (symmetric, selected_glft):
             external = run_external_replay(
                 normalized,
                 strategy=strategy,
                 calibration=calibration,
             )
-            match = native_daily[
+            native = replay_bybit_day(
+                events,
+                symbol="BTCUSDT",
+                date=date_value,
+                strategy=strategy,
+                calibration=calibration,
+                settings=settings,
+            )
+            study = native_daily[
                 (native_daily["date"] == date_value)
                 & (native_daily["strategy"] == strategy.name)
                 & np.isclose(
@@ -347,17 +385,24 @@ def run_hft_crosscheck(
                 )
                 & (native_daily["latency_ms"] == PRIMARY_LATENCY_MS)
             ]
-            if len(match) != 1:
+            if len(study) != 1:
                 raise ValueError(
                     f"native primary result is missing for {date_value} {strategy.name}"
                 )
-            rows.append(
-                comparison_row(
-                    trading_date=date_value,
-                    strategy=strategy.name,
-                    native=match.iloc[0].to_dict(),
-                    external=external,
-                    package_version=hft.__version__,
-                )
+            study_row = study.iloc[0].to_dict()
+            row = comparison_row(
+                trading_date=date_value,
+                strategy=strategy.name,
+                native={
+                    "fill_count": native.fill_count,
+                    "filled_volume": native.filled_volume,
+                    "net_pnl": native.net_pnl,
+                },
+                external=external,
+                package_version=hft.__version__,
             )
+            row["study_cancellation_rule"] = study_row["cancellation_rule"]
+            row["study_fill_count"] = float(study_row["fill_count"])
+            row["study_net_pnl"] = float(study_row["net_pnl"])
+            rows.append(row)
     return pd.DataFrame(rows)
