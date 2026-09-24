@@ -148,12 +148,22 @@ def render_research_figures(output_dir: str | Path) -> None:
     fig, axis = plt.subplots(figsize=(8, 4.5))
     if not primary.empty:
         finals = []
-        for strategy, rows in primary.groupby("strategy", sort=True):
+        # Two strategies can end within a fraction of a per cent of each other,
+        # in which case one line hides the other completely. Alternating dash
+        # patterns keep every series in the legend visible on the canvas.
+        styles = ("-", "--", "-.", ":")
+        for index, (strategy, rows) in enumerate(primary.groupby("strategy", sort=True)):
             rows = rows.sort_values("date")
             dates = pd.to_datetime(rows["date"])
             cumulative = rows["net_pnl"].cumsum()
             finals.append(cumulative.iloc[-1])
-            axis.plot(dates, cumulative, label=strategy)
+            axis.plot(
+                dates,
+                cumulative,
+                label=strategy,
+                linestyle=styles[index % len(styles)],
+                linewidth=1.6,
+            )
         axis.legend(frameon=False, fontsize=8)
         # One strategy can end two orders of magnitude from another, which on a
         # linear axis flattens it onto zero and hides its shape entirely.
