@@ -9,7 +9,6 @@ description = "Avellaneda-Stoikov market maker research repo"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-  "hftbacktest==2.4.4",
   "matplotlib>=3.8,<4",
   "numpy>=1.26,<2.3",
   "pandas>=2.1,<4",
@@ -22,6 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Only the external replay cross-check imports this, and it imports it lazily,
+# so installing and testing the package does not need the wheel.
+external = [
+  "hftbacktest==2.4.4",
+]
 gpu = [
   "torch>=2.2,<3",
 ]
