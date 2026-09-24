@@ -27,6 +27,14 @@ from p2.research_models import (
 StrategyKind = Literal["symmetric", "as", "glft", "glft_imbalance"]
 CancellationRule = Literal["cancel-from-back", "proportional"]
 
+# Where a quote sits relative to the reconstructed book at placement time.
+#   "displayed"   the price carries displayed size, so we join behind it;
+#   "empty_level" the price lies inside the reconstructed window but holds no
+#                 displayed size, so we stand alone at the front of it;
+#   "beyond_book" the price lies deeper than the deepest reconstructed level, so
+#                 the queue ahead is unknown and no fill may be claimed.
+PlacementState = Literal["displayed", "empty_level", "beyond_book"]
+
 
 @dataclass(frozen=True)
 class StrategySpec:
@@ -95,7 +103,8 @@ class DailyReplayResult:
     fills: tuple[CryptoFill, ...]
     quote_count: int
     quote_volume: float
-    unobserved_placements: int
+    empty_level_placements: int
+    beyond_book_placements: int
     gross_pnl: float
     fees: float
     net_pnl: float
@@ -131,7 +140,12 @@ class _WorkingOrder:
     remaining: float
     ahead: float
     market_size: float
-    depth_observed: bool
+    placement: PlacementState
+
+    @property
+    def fillable(self) -> bool:
+        """True when the queue at this price is modelled rather than unknown."""
+        return self.placement != "beyond_book"
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,11 +327,20 @@ def _update_queue(
         return
     new_size = _depth_at_price(prices, sizes, order.price, settings.tick_size)
     if new_size is None:
+        # No displayed size at our price. Inside the reconstructed window that
+        # means the level is empty and we stand alone at its front. Deeper than
+        # the window it only means the price drifted out of view, so an order
+        # that already holds a modelled position keeps it unchanged.
+        if _classify_placement(order.side, order.price, prices) == "empty_level":
+            order.ahead = 0.0
+            order.market_size = 0.0
+            order.placement = "empty_level"
         return
-    if not order.depth_observed:
+    if order.placement == "beyond_book":
+        # First sight of this price: join behind everything displayed there.
         order.ahead = new_size
         order.market_size = new_size
-        order.depth_observed = True
+        order.placement = "displayed"
         return
     reduction = max(order.market_size - new_size, 0.0)
     if reduction > 0.0 and order.ahead > 0.0:
@@ -329,26 +352,48 @@ def _update_queue(
     order.market_size = new_size
 
 
+def _classify_placement(
+    side: Literal["bid", "ask"],
+    price: float,
+    prices: np.ndarray,
+) -> PlacementState:
+    """Say whether a price without displayed size is empty or simply unseen.
+
+    The reconstruction keeps only the top levels of each side, so a quote price
+    absent from that window means one of two very different things. Inside the
+    window the book genuinely shows no size at that tick and a resting order
+    stands alone at the front of it. Deeper than the window we know nothing
+    about the queue, and claiming a position there would invent liquidity.
+    """
+    finite = prices[np.isfinite(prices)]
+    if finite.size == 0:
+        return "beyond_book"
+    if side == "bid":
+        return "empty_level" if price >= float(finite.min()) else "beyond_book"
+    return "empty_level" if price <= float(finite.max()) else "beyond_book"
+
+
 def _new_working_order(
     side: Literal["bid", "ask"],
     price: float,
     prices: np.ndarray,
     sizes: np.ndarray,
     settings: ReplaySettings,
-) -> tuple[_WorkingOrder, bool]:
+) -> _WorkingOrder:
     depth = _depth_at_price(prices, sizes, price, settings.tick_size)
-    observed = depth is not None
-    initial_depth = float(depth) if depth is not None else 0.0
-    return (
-        _WorkingOrder(
-            side=side,
-            price=price,
-            remaining=settings.order_size,
-            ahead=initial_depth,
-            market_size=initial_depth,
-            depth_observed=observed,
-        ),
-        not observed,
+    if depth is not None:
+        placement: PlacementState = "displayed"
+        initial_depth = float(depth)
+    else:
+        placement = _classify_placement(side, price, prices)
+        initial_depth = 0.0
+    return _WorkingOrder(
+        side=side,
+        price=price,
+        remaining=settings.order_size,
+        ahead=initial_depth,
+        market_size=initial_depth,
+        placement=placement,
     )
 
 
@@ -421,7 +466,8 @@ def replay_bybit_day(
     cash = 0.0
     quote_count = 0
     quote_volume = 0.0
-    unobserved_placements = 0
+    empty_level_placements = 0
+    beyond_book_placements = 0
     fills: list[CryptoFill] = []
     last_decision_ms = -10**18
     submitted_bid: float | None = None
@@ -431,7 +477,8 @@ def replay_bybit_day(
     session_start_ms = int(events.times[0])
 
     def activate_due(now_ms: int) -> None:
-        nonlocal bid_order, ask_order, quote_count, quote_volume, unobserved_placements
+        nonlocal bid_order, ask_order, quote_count, quote_volume
+        nonlocal empty_level_placements, beyond_book_placements
         while commands and commands[0].effective_ms <= now_ms:
             command = commands.popleft()
             target_bid = command.bid
@@ -451,21 +498,23 @@ def replay_bybit_day(
             if target_bid is None:
                 bid_order = None
             elif bid_order is None or bid_order.price != target_bid:
-                bid_order, unobserved = _new_working_order(
+                bid_order = _new_working_order(
                     "bid", target_bid, bid_prices, bid_sizes, settings
                 )
                 quote_count += 1
                 quote_volume += settings.order_size
-                unobserved_placements += unobserved
+                empty_level_placements += bid_order.placement == "empty_level"
+                beyond_book_placements += bid_order.placement == "beyond_book"
             if target_ask is None:
                 ask_order = None
             elif ask_order is None or ask_order.price != target_ask:
-                ask_order, unobserved = _new_working_order(
+                ask_order = _new_working_order(
                     "ask", target_ask, ask_prices, ask_sizes, settings
                 )
                 quote_count += 1
                 quote_volume += settings.order_size
-                unobserved_placements += unobserved
+                empty_level_placements += ask_order.placement == "empty_level"
+                beyond_book_placements += ask_order.placement == "beyond_book"
 
     for event_row, now_ms in enumerate(events.times):
         now_ms = int(now_ms)
@@ -506,22 +555,27 @@ def replay_bybit_day(
                 order = ask_order
             else:
                 raise ValueError(f"unsupported aggressor side: {trade_side}")
-            if current_valid and order is not None:
+            if current_valid and order is not None and order.fillable:
                 tolerance = settings.tick_size * 1e-6
                 at_price = abs(order.price - trade_price) <= tolerance
                 swept_through = (
                     order.side == "bid" and trade_price < order.price - tolerance
                 ) or (order.side == "ask" and trade_price > order.price + tolerance)
                 available = 0.0
-                if swept_through:
-                    order.ahead = 0.0
-                    order.market_size = 0.0
-                    available = order.remaining
-                elif at_price and order.depth_observed:
+                if at_price or swept_through:
+                    # Bybit prints one row per matched price level, so aggressor
+                    # volume is observed level by level. Whether the row lands on
+                    # our price or past it, it can only reach us after clearing
+                    # the queue ahead, and it can only fill what it actually
+                    # traded. A sweep still fills us completely, but through its
+                    # own volume rather than by fiat.
                     consumed_ahead = min(order.ahead, trade_volume)
                     order.ahead -= consumed_ahead
-                    order.market_size = max(order.market_size - trade_volume, 0.0)
                     available = max(trade_volume - consumed_ahead, 0.0)
+                    if swept_through:
+                        order.market_size = 0.0
+                    else:
+                        order.market_size = max(order.market_size - trade_volume, 0.0)
                 capacity = (
                     settings.inventory_limit - inventory
                     if order.side == "bid"
@@ -621,7 +675,8 @@ def replay_bybit_day(
         fills=tuple(fills),
         quote_count=quote_count,
         quote_volume=quote_volume,
-        unobserved_placements=unobserved_placements,
+        empty_level_placements=empty_level_placements,
+        beyond_book_placements=beyond_book_placements,
         gross_pnl=float(gross_pnl),
         fees=fees,
         net_pnl=float(net_pnl),

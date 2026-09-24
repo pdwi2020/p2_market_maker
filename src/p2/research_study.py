@@ -66,7 +66,8 @@ DAILY_COLUMNS = (
     "inventory_std",
     "max_abs_inventory",
     "end_inventory",
-    "unobserved_placements",
+    "empty_level_placements",
+    "beyond_book_placements",
 )
 
 DECOMPOSITION_COLUMNS = (
@@ -503,7 +504,8 @@ def replay_result_rows(
                 "inventory_std": result.inventory_std,
                 "max_abs_inventory": result.max_abs_inventory,
                 "end_inventory": result.end_inventory,
-                "unobserved_placements": result.unobserved_placements,
+                "empty_level_placements": result.empty_level_placements,
+                "beyond_book_placements": result.beyond_book_placements,
             }
         )
         decomposition_rows.append(

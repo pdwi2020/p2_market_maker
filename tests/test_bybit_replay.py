@@ -1,11 +1,13 @@
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 from p2.bybit_replay import (
     ReplaySettings,
+    _new_working_order,
     StrategySpec,
     load_bybit_events,
     replay_bybit_day,
@@ -25,6 +27,8 @@ def _write_stream(
     trade_price: float = 100.0,
     final_bid: float = 100.5,
     final_ask: float = 101.5,
+    extra_bid_levels: tuple[tuple[float, float], ...] = (),
+    extra_ask_levels: tuple[tuple[float, float], ...] = (),
 ) -> None:
     book_count = len(bid_sizes) + 1
     times: list[int] = []
@@ -49,10 +53,10 @@ def _write_stream(
         best_bid_sizes.append(depth)
         best_asks.append(101.0)
         best_ask_sizes.append(2.0)
-        bid_prices.append([100.0, 99.9])
-        all_bid_sizes.append([depth, 2.0])
-        ask_prices.append([101.0, 101.1])
-        ask_sizes.append([2.0, 2.0])
+        bid_prices.append([100.0, 99.9, *(price for price, _ in extra_bid_levels)])
+        all_bid_sizes.append([depth, 2.0, *(size for _, size in extra_bid_levels)])
+        ask_prices.append([101.0, 101.1, *(price for price, _ in extra_ask_levels)])
+        ask_sizes.append([2.0, 2.0, *(size for _, size in extra_ask_levels)])
         trade_prices.append(None)
         trade_volumes.append(None)
         trade_sides.append(None)
@@ -197,19 +201,93 @@ def test_inventory_limit_suppresses_risk_increasing_quote(tmp_path: Path) -> Non
     assert result.max_abs_inventory <= 0.01 + 1e-12
 
 
-def test_price_sweep_fills_resting_order(tmp_path: Path) -> None:
-    source = tmp_path / "events.parquet"
-    _write_stream(source, bid_sizes=(100.0,), trade_volume=0.01, trade_price=99.9)
-
-    result = replay_bybit_day(
+def _replay(source: Path, strategy: StrategySpec):
+    return replay_bybit_day(
         source,
         symbol="BTCUSDT",
         date="2025-07-01",
-        strategy=StrategySpec("symmetric"),
+        strategy=strategy,
         calibration=CALIBRATION,
         settings=ReplaySettings(latency_ms=0),
     )
 
+
+def test_sweep_does_not_fill_through_a_deep_queue(tmp_path: Path) -> None:
+    """A tick through our price is not a licence to fill the whole order.
+
+    Bybit prints one row per matched price level, so a 0.01 BTC print cannot
+    have cleared the 100 BTC resting ahead of us at that level.
+    """
+    source = tmp_path / "events.parquet"
+    _write_stream(source, bid_sizes=(100.0,), trade_volume=0.01, trade_price=99.9)
+
+    result = _replay(source, StrategySpec("symmetric"))
+
+    assert result.fill_count == 0
+
+
+def test_sweep_fills_only_the_volume_beyond_the_queue(tmp_path: Path) -> None:
+    source = tmp_path / "events.parquet"
+    _write_stream(source, bid_sizes=(1.0,), trade_volume=1.005, trade_price=99.9)
+
+    result = _replay(source, StrategySpec("symmetric"))
+
     assert result.fill_count == 1
-    assert result.filled_volume == pytest.approx(0.01)
+    assert result.filled_volume == pytest.approx(0.005)
     assert result.fills[0].price == pytest.approx(100.0)
+
+
+def test_quote_alone_on_an_empty_level_fills_from_a_sweep(tmp_path: Path) -> None:
+    """An empty tick inside the window leaves us first in line, not unseen."""
+    source = tmp_path / "events.parquet"
+    _write_stream(
+        source,
+        bid_sizes=(1.0,),
+        trade_volume=0.004,
+        trade_price=99.7,
+        extra_bid_levels=((99.7, 2.0),),
+        extra_ask_levels=((101.2, 2.0),),
+    )
+
+    result = _replay(source, StrategySpec("glft", gamma=0.001))
+
+    assert result.beyond_book_placements == 0
+    assert result.empty_level_placements >= 1
+    assert result.fill_count == 1
+    assert result.filled_volume == pytest.approx(0.004)
+    assert result.fills[0].price == pytest.approx(99.8)
+
+
+def test_quote_below_the_reconstructed_book_never_fills(tmp_path: Path) -> None:
+    """Without a visible queue we decline to invent one."""
+    source = tmp_path / "events.parquet"
+    _write_stream(source, bid_sizes=(1.0,), trade_volume=5.0, trade_price=99.7)
+
+    result = _replay(source, StrategySpec("glft", gamma=0.001))
+
+    assert result.beyond_book_placements >= 1
+    assert result.fill_count == 0
+
+
+@pytest.mark.parametrize(
+    ("side", "price", "expected"),
+    [
+        ("bid", 100.0, "displayed"),
+        ("bid", 99.95, "empty_level"),
+        ("bid", 99.8, "beyond_book"),
+        ("ask", 101.0, "displayed"),
+        ("ask", 101.05, "empty_level"),
+        ("ask", 101.2, "beyond_book"),
+    ],
+)
+def test_placement_separates_empty_levels_from_unseen_depth(
+    side: str, price: float, expected: str
+) -> None:
+    prices = np.array([100.0, 99.9]) if side == "bid" else np.array([101.0, 101.1])
+    sizes = np.array([3.0, 2.0])
+
+    order = _new_working_order(side, price, prices, sizes, ReplaySettings())
+
+    assert order.placement == expected
+    assert order.fillable is (expected != "beyond_book")
+    assert order.ahead == pytest.approx(3.0 if expected == "displayed" else 0.0)
