@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
 
@@ -22,6 +23,8 @@ TABLE_FILES = {
     "hftbacktest_crosscheck": "hftbacktest_crosscheck.csv",
     "lobster_appendix": "lobster_appendix.csv",
 }
+
+METHOD_ORDER = ("exact_fifo", "l2_cancel_from_back", "l2_proportional")
 
 FIGURE_FILES = (
     "cumulative_net_pnl.png",
@@ -97,6 +100,35 @@ def _primary_crypto(daily: pd.DataFrame) -> pd.DataFrame:
     return selected
 
 
+def _short_label(strategy: str) -> str:
+    """Wrap a strategy name so bar charts do not turn into vertical text."""
+    parts = strategy.split("_")
+    if parts[0] == "glft" and len(parts) > 1 and parts[1] == "imbalance":
+        head, tail = "glft imbalance", parts[2:]
+    else:
+        head, tail = parts[0], parts[1:]
+    if not tail:
+        return head
+    return head + "\n" + " ".join(tail).replace("gamma ", "gamma=").replace("beta ", "beta=")
+
+
+def _apply_strategy_ticks(axis: plt.Axes, strategies: list[str]) -> None:
+    axis.set_xticks(range(len(strategies)))
+    axis.set_xticklabels([_short_label(name) for name in strategies], fontsize=8)
+    axis.tick_params(axis="x", rotation=0)
+
+
+def _scale_for(values: np.ndarray) -> tuple[str, float]:
+    """Pick a y-scale that keeps small series visible next to large ones."""
+    magnitudes = np.abs(values[np.isfinite(values) & (values != 0.0)])
+    if magnitudes.size < 2:
+        return "linear", 0.0
+    spread = magnitudes.max() / magnitudes.min()
+    if spread <= 20.0:
+        return "linear", 0.0
+    return "symlog", float(magnitudes.min())
+
+
 def _save(fig: plt.Figure, path: Path) -> None:
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
@@ -115,14 +147,29 @@ def render_research_figures(output_dir: str | Path) -> None:
 
     fig, axis = plt.subplots(figsize=(8, 4.5))
     if not primary.empty:
+        finals = []
         for strategy, rows in primary.groupby("strategy", sort=True):
             rows = rows.sort_values("date")
-            axis.plot(rows["date"], rows["net_pnl"].cumsum(), label=strategy)
-        axis.legend(frameon=False)
+            dates = pd.to_datetime(rows["date"])
+            cumulative = rows["net_pnl"].cumsum()
+            finals.append(cumulative.iloc[-1])
+            axis.plot(dates, cumulative, label=strategy)
+        axis.legend(frameon=False, fontsize=8)
+        # One strategy can end two orders of magnitude from another, which on a
+        # linear axis flattens it onto zero and hides its shape entirely.
+        scale, linthresh = _scale_for(np.asarray(finals, dtype=float))
+        if scale == "symlog":
+            axis.set_yscale("symlog", linthresh=linthresh)
+            axis.set_ylabel("USDT (symmetric log scale)")
+        axis.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+        axis.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+        axis.xaxis.set_minor_locator(mdates.MonthLocator())
+    axis.axhline(0.0, color="black", linewidth=0.8)
     axis.set_title("Cumulative BTCUSDT net PnL")
     axis.set_xlabel("UTC date")
-    axis.set_ylabel("USDT")
-    axis.tick_params(axis="x", rotation=35)
+    if not axis.get_ylabel():
+        axis.set_ylabel("USDT")
+    axis.tick_params(axis="x", rotation=30)
     _save(fig, destination / "cumulative_net_pnl.png")
 
     fig, axis = plt.subplots(figsize=(7, 4.5))
@@ -168,12 +215,15 @@ def render_research_figures(output_dir: str | Path) -> None:
             "inventory_revaluation",
             "fee_cost",
         ]].sum()
+        # fee_cost is published as a positive magnitude; the identity is
+        # realized spread plus inventory revaluation minus fees.
         totals["fee_cost"] *= -1.0
-        totals.plot(kind="bar", ax=axis)
-        axis.legend(frameon=False)
+        totals.plot(kind="bar", ax=axis, rot=0)
+        axis.legend(frameon=False, fontsize=8)
+        _apply_strategy_ticks(axis, list(totals.index))
     axis.axhline(0.0, color="black", linewidth=0.8)
     axis.set_title("BTCUSDT PnL decomposition")
-    axis.set_xlabel("Strategy")
+    axis.set_xlabel("")
     axis.set_ylabel("USDT")
     _save(fig, destination / "pnl_decomposition.png")
 
@@ -185,29 +235,60 @@ def render_research_figures(output_dir: str | Path) -> None:
             for strategy in strategies
         ]
         axis.boxplot(distributions, tick_labels=strategies)
+        axis.set_xticks(range(1, len(strategies) + 1))
+        axis.set_xticklabels(
+            [_short_label(name) for name in strategies], fontsize=8
+        )
     axis.axhline(0.0, color="black", linewidth=0.8)
     axis.set_title("BTCUSDT end-of-day inventory")
-    axis.set_xlabel("Strategy")
+    axis.set_xlabel("")
     axis.set_ylabel("BTC")
-    axis.tick_params(axis="x", rotation=25)
     _save(fig, destination / "inventory_distribution.png")
 
-    fig, axes = plt.subplots(1, 3, figsize=(10, 3.8))
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4.0))
     aggregate_queue = queue_validation.copy()
     if "date" in aggregate_queue and (aggregate_queue["date"] == "ALL").any():
         aggregate_queue = aggregate_queue[aggregate_queue["date"] == "ALL"]
     metrics = (
-        ("fill_count_relative_bias", "Fill-count bias"),
-        ("fill_time_ks", "Fill-time KS"),
-        ("gross_pnl_error", "Gross-PnL error"),
+        ("fill_count_relative_bias", "Fill-count bias", "fraction of exact fills"),
+        ("fill_time_ks", "Fill-time KS", "KS statistic"),
+        ("gross_pnl_error", "Gross-PnL error", "USD against exact FIFO"),
     )
-    for axis, (column, title) in zip(axes, metrics, strict=True):
-        if not aggregate_queue.empty and column in aggregate_queue:
-            grouped = aggregate_queue.groupby("method")[column].mean().sort_index()
-            axis.bar(grouped.index, grouped.values)
+    # Each quoting arm is a separate comparison, so averaging them together
+    # would hide exactly the differences the arms were added to show.
+    arms = (
+        sorted(aggregate_queue["arm"].unique())
+        if "arm" in aggregate_queue and not aggregate_queue.empty
+        else []
+    )
+    present = (
+        set(aggregate_queue["method"]) if not aggregate_queue.empty else set()
+    )
+    methods = [name for name in METHOD_ORDER if name in present]
+    width = 0.8 / max(len(arms), 1)
+    for axis, (column, title, units) in zip(axes, metrics, strict=True):
+        for index, arm in enumerate(arms):
+            scoped = aggregate_queue[aggregate_queue["arm"] == arm]
+            values = [
+                float(scoped.loc[scoped["method"] == method, column].mean())
+                if (scoped["method"] == method).any()
+                else np.nan
+                for method in methods
+            ]
+            positions = np.arange(len(methods)) + index * width - 0.4 + width / 2
+            axis.bar(positions, values, width=width, label=arm)
         axis.axhline(0.0, color="black", linewidth=0.8)
         axis.set_title(title)
-        axis.tick_params(axis="x", rotation=25)
+        axis.set_ylabel(units, fontsize=8)
+        axis.set_xticks(range(len(methods)))
+        axis.set_xticklabels(
+            [name.replace("l2_", "L2 ").replace("_", " ") for name in methods],
+            fontsize=8,
+            rotation=20,
+            ha="right",
+        )
+    if arms:
+        axes[0].legend(frameon=False, fontsize=7, title="arm", title_fontsize=7)
     _save(fig, destination / "queue_model_error.png")
 
 

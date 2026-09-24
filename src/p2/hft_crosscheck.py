@@ -32,6 +32,22 @@ from p2.research_study import PRIMARY_LATENCY_MS, PRIMARY_MAKER_FEE_RATE
 MATCHED_NATIVE_RULE: CancellationRule = "trades-only"
 EXTERNAL_QUEUE_MODEL = "risk_adverse"
 
+# The external engine's partial-fill exchange raises InvalidOrderStatus part way
+# through a Bybit day, so the no-partial-fill exchange is used instead. Our quote
+# is a single 0.01 BTC order, which that exchange fills all or nothing while the
+# native engine allows a partial fill. This is the one modelling difference that
+# remains between the two engines and it is published per row.
+EXTERNAL_FILL_POLICY = "all_or_nothing"
+NATIVE_FILL_POLICY = "partial"
+BYBIT_LOT_SIZE = 0.001
+BYBIT_TICK_SIZE = 0.1
+
+# hbt.elapse returns 0 to continue and 1 at the end of the data. Every other
+# code is an engine error, and treating one as a normal end would silently
+# truncate the replay.
+_ELAPSE_CONTINUE = 0
+_ELAPSE_END_OF_DATA = 1
+
 CROSSCHECK_DATES = (
     "2025-07-07",
     "2025-08-04",
@@ -242,15 +258,22 @@ def run_external_replay(
         .linear_asset(1.0)
         .constant_order_latency(latency_ms * 1_000_000, latency_ms * 1_000_000)
         .risk_adverse_queue_model()
-        .partial_fill_exchange()
+        .no_partial_fill_exchange()
         .trading_value_fee_model(maker_fee_rate, 0.00055)
-        .tick_size(0.1)
-        .lot_size(0.01)
+        .tick_size(BYBIT_TICK_SIZE)
+        .lot_size(BYBIT_LOT_SIZE)
     )
     hbt = hft.HashMapMarketDepthBacktest([asset])
     next_order_id = 1
     try:
-        while hbt.elapse(100_000_000) == 0:
+        while True:
+            code = hbt.elapse(100_000_000)
+            if code == _ELAPSE_END_OF_DATA:
+                break
+            if code != _ELAPSE_CONTINUE:
+                raise RuntimeError(
+                    f"external replay stopped with engine code {code}"
+                )
             hbt.clear_inactive_orders(0)
             depth = hbt.depth(0)
             if not np.isfinite(depth.best_bid) or not np.isfinite(depth.best_ask):
@@ -314,6 +337,8 @@ def comparison_row(
         "native_queue_model": MATCHED_NATIVE_RULE,
         "external_queue_model": EXTERNAL_QUEUE_MODEL,
         "matched_queue_model": True,
+        "native_fill_policy": NATIVE_FILL_POLICY,
+        "external_fill_policy": EXTERNAL_FILL_POLICY,
     }
     for metric in ("fill_count", "filled_volume", "net_pnl"):
         native_value = float(native[metric])
