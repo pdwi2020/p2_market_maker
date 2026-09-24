@@ -1,5 +1,7 @@
 /data/
 .cache/
+.ci-data/
+.ci-cache/
 .venv/
 __pycache__/
 *.pyc

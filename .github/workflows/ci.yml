@@ -18,8 +18,8 @@ jobs:
         python-version: ["3.11", "3.12"]
     env:
       MPLBACKEND: Agg
-      P2_DATA_DIR: ${{ runner.temp }}/p2-data
-      P2_CACHE_DIR: ${{ runner.temp }}/p2-cache
+      P2_DATA_DIR: ${{ github.workspace }}/.ci-data
+      P2_CACHE_DIR: ${{ github.workspace }}/.ci-cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
