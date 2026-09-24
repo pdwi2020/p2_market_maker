@@ -12,9 +12,10 @@ fee. On BTCUSDT the quoted spread is about 0.01 basis points of notional, while
 one-second adverse selection costs 0.30 to 0.41 basis points and the VIP0 maker
 fee is 2.0 basis points. The spread is roughly two orders of magnitude too thin
 to pay for either. The same engine on a 2012 AAPL sample, where the quoted width
-is about 2 basis points and the maker side earns a rebate, turns positive. The
-result is therefore about the venue's economics rather than about the quoting
-rules.
+is roughly two hundred times wider and the maker side earns a rebate, turns
+positive on the one day tested. That single control cannot carry a causal claim
+on its own, but together with the decomposition it points at the venue's
+spread-to-cost ratio rather than at the quoting rules.
 
 ## Question
 

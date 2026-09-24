@@ -1,7 +1,7 @@
 # P2: Market Making on Real Limit Order Books
 
 [![CI](https://github.com/pdwi2020/p2_market_maker/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/pdwi2020/p2_market_maker/actions/workflows/ci.yml)
-[![Python 3.11 to 3.12](https://img.shields.io/badge/python-3.11%E2%80%933.12-blue.svg)](https://www.python.org/)
+[![Python 3.11 to 3.13](https://img.shields.io/badge/python-3.11%20to%203.13-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 **Question, fixed before any result was computed:** on real limit order books,
@@ -257,6 +257,20 @@ make research
 | `P2_DATA_DIR` | `<repo>/data` | Downloaded samples. |
 | `P2_CACHE_DIR` | `<repo>/.cache` | Reconstructed per-day caches. |
 | `P2_LAKE_DIR` | unset | Full history; anything needing it skips when unset. |
+
+### Provenance of the published results
+
+The committed tables and figures come from one `make research` invocation on
+CPython 3.13.8, macOS arm64, taking 5 hours 39 minutes wall clock with four
+worker processes over a warm reconstruction cache. The package supports 3.11
+through 3.13; CI exercises 3.11 and 3.12 on every push, without market data or
+an external lake. Checked-in configurations carry fixed seeds, the sample
+downloader prints SHA-256 for each archive, and relative paths resolve from the
+repository root rather than the caller's working directory.
+
+Per-day results are checkpointed under a fingerprint of the replay source, the
+interpreter version and the NumPy version, so changing the engine invalidates
+every cached day rather than silently mixing results from two code states.
 
 ## Repository layout
 
