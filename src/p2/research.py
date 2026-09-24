@@ -17,7 +17,7 @@ from p2.data.bybit import find_bybit_files, reconstruct_bybit_day
 from p2.data.mbo import find_mbo_file
 from p2.hft_crosscheck import CROSSCHECK_DATES, run_hft_crosscheck
 from p2.lobster_appendix import run_lobster_appendix
-from p2.queue_validation import VALIDATION_DATES, validate_es_queues
+from p2.queue_validation import ARMS, VALIDATION_DATES, validate_es_queues
 from p2.research_outputs import publish_research_outputs
 from p2.research_study import (
     SELECTION_START,
@@ -239,6 +239,14 @@ def run_research(
         "cache": cache_summary,
         "queue_validation": {
             "dates": list(VALIDATION_DATES),
+            "arms": [
+                {
+                    "name": arm.name,
+                    "offset_ticks": arm.offset_ticks,
+                    "latency_ms": arm.latency_ms,
+                }
+                for arm in ARMS
+            ],
             "selected_rule": queue.selected_rule,
         },
         "crypto": crypto.summary,
