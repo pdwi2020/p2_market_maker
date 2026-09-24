@@ -260,6 +260,62 @@ Figures read the published tables rather than private replay state. Tabular
 outputs contain numbers and identifiers only. Missing optional LOBSTER symbols
 are listed in `summary.json`.
 
+## Amendments
+
+Amendments are recorded here with the date they were made, what the original
+protocol said, and what replaced it. Nothing below was chosen after inspecting
+a test-window result.
+
+### 2026-09-23: fill accounting against observed trade volume
+
+Measured on 2025-07-06, 2025-10-06 and 2026-01-05, the Bybit trade feed emits
+one row per matched price level rather than one aggregated row per aggressor
+order: 15 to 19 per cent of same-millisecond, same-side trade groups span more
+than one price, with a median of 5 rows and a median span of 1.1 USDT. In
+99.57 per cent of those groups the rows arrive best price first. Aggressor
+volume is therefore observable level by level, which fixes the fill rule below.
+
+| | Original | Amended |
+| --- | --- | --- |
+| Trade printing past a resting quote | Fills the entire remaining order size, queue ahead discarded | Consumes the queue ahead with the trade's own volume and fills only the residual |
+| Trade printing at a resting quote | Same volume rule, but only where the price carried displayed size | Same volume rule at every price with a modelled queue |
+
+A sweep large enough to clear the level still fills the order completely,
+because its own rows carry the volume to do so.
+
+### 2026-09-23: three placement states
+
+The original protocol said only that "a newly effective order joins the back of
+displayed volume at its price". Reconstruction keeps the top 20 levels per
+side, so a quote price absent from that window meant two different things that
+were handled identically.
+
+| | Original | Amended |
+| --- | --- | --- |
+| Price carries displayed size | Join behind it | Unchanged (`displayed`) |
+| Price inside the window, no displayed size | Treated as unseen: no fill at that price, but full fill on any print past it | Alone at the front of an empty level (`empty_level`), fillable on its own volume |
+| Price deeper than the deepest reconstructed level | Same as above | Queue unknown (`beyond_book`), no fill may be claimed until the price enters the window |
+
+Daily rows report `empty_level_placements` and `beyond_book_placements` so the
+share of each channel is auditable per strategy and per day.
+
+### 2026-09-23: Avellaneda-Stoikov horizon reported as preregistered
+
+The rolling session horizon `T = 86,400 s` was fixed before any results. On a
+representative calibration (2025-07-06: sigma 3.202 USDT per square-root
+second, kappa 0.2516, A 1.849) the inventory term `gamma sigma^2 tau / 2`
+dominates: at gamma 0.001 the half-spread is about 447 USDT at session start,
+roughly 41 basis points, decaying to about 4 USDT by session end. On that day
+89.1 per cent of Avellaneda-Stoikov placements fall deeper than the
+reconstructed book, at a median of 49 USDT beyond it.
+
+The horizon is **not** retuned. Doing so after seeing test-window results is
+exactly what this document exists to prevent. The Avellaneda-Stoikov arm is
+reported as preregistered, and its results are read as a statement about that
+parameterisation rather than about inventory-aware quoting in general. The
+share of its quotes that sit beyond the observable book is published alongside
+its performance.
+
 ## References
 
 - Avellaneda, M. and Stoikov, S. (2008), *High-frequency trading in a limit
