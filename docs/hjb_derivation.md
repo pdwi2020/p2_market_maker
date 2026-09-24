@@ -431,6 +431,51 @@ of the fill-intensity curve. This is why the test suite checks that
 `optimal_spread(...)` approaches \(1/\kappa\) as \(\gamma \to 0\): it is the
 risk-neutral benchmark implied directly by Avellaneda-Stoikov eqs. (8)-(9).
 
+## 7.1 GLFT asymptotic quotes with a finite order size
+Avellaneda-Stoikov closes in a terminal-horizon problem, so its quote width
+carries the factor \(\gamma \sigma^2 \tau\) and widens without bound as the
+horizon grows. Gueant, Lehalle, and Fernandez-Tapia (2013) solve the same
+inventory problem in the stationary regime and give asymptotic quotes that no
+longer depend on \(\tau\). They also carry the order size \(\Delta\) explicitly
+instead of assuming unit orders, which matters here because the crypto contract
+quotes 0.01 BTC against intensities calibrated per unit of depth.
+
+Write the risk term as \(\gamma\Delta\) and define
+
+\[
+c_1 = \frac{1}{\gamma\Delta}\,\log\!\left(1 + \frac{\gamma\Delta}{\kappa}\right),
+\qquad
+c_2 = \sqrt{\frac{\gamma}{2 A \Delta \kappa}
+  \left(1 + \frac{\gamma\Delta}{\kappa}\right)^{\frac{\kappa}{\gamma\Delta} + 1}}.
+\]
+
+The reservation price and one-sided distance are then
+
+\[
+r_t = s_t - q_t\,\sigma\,c_2,
+\qquad
+h^{\mathrm{GLFT}} = c_1 + \frac{\Delta}{2}\,\sigma\,c_2,
+\]
+
+with quotes \(r_t \pm h^{\mathrm{GLFT}}\). Two properties matter for the study.
+The inventory skew is linear in \(q\) exactly as in section 5, but its
+coefficient \(\sigma c_2\) is constant through the session rather than decaying
+with \(\tau\). And \(c_1\) reduces to the risk-neutral \(1/\kappa\) of section 7
+as \(\gamma\Delta \to 0\), so the whole expression is the finite-risk,
+finite-size generalisation of the same quote width.
+
+`src/p2/research_models.py:glft_quotes` implements these expressions directly,
+computing \(c_2\) through `log1p` and an exponential of
+\(\left(\kappa/(\gamma\Delta) + 1\right)\log(1 + \gamma\Delta/\kappa)\) so the
+power stays finite when \(\gamma\Delta\) is small relative to \(\kappa\).
+
+The preregistered order-flow variant adds a skew on top of these quotes. With
+touch imbalance \(I \in [-1, 1]\) and a coefficient \(\beta\), both quotes shift
+by \(\beta\,\text{tick}\,I\), in the spirit of the order-flow-imbalance price
+response of Cont, Kukanov, and Stoikov (2014). The shift moves the pair
+together, so it changes where the maker leans without changing the width that
+\(c_1\) and \(c_2\) set.
+
 ## 8. Queue-reactive correction
 The Avellaneda-Stoikov intensity model is one-dimensional: execution depends only
 on quote distance \(\delta\). Huang, Lehalle, and Rosenbaum (2015) replace that
@@ -708,3 +753,5 @@ coherent.
 - Avellaneda, M. and S. Stoikov (2008), *High-frequency trading in a limit order book*.
 - Huang, W., C.-A. Lehalle, and M. Rosenbaum (2015), *Simulating and analyzing order book data: The queue-reactive model*.
 - Glosten, L. and P. Milgrom (1985), *Bid, ask and transaction prices in a specialist market with heterogeneously informed traders*.
+- Gueant, O., C.-A. Lehalle, and J. Fernandez-Tapia (2013), *Dealing with the inventory risk: a solution to the market making problem*.
+- Cont, R., A. Kukanov, and S. Stoikov (2014), *The price impact of order book events*.
