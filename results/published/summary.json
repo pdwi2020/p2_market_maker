@@ -1,0 +1,675 @@
+{
+  "cache": {
+    "cached_days": 532,
+    "reconstructed_days": 0,
+    "required_days": 532,
+    "workers": 4
+  },
+  "crypto": {
+    "main_study": [
+      {
+        "annualized_sharpe": -6.534823962944451,
+        "days": 301,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 3239.155334260201,
+        "fill_count": 68870,
+        "fill_ratio": 0.0005786502998903173,
+        "filled_volume": 176.204554,
+        "gross_pnl": -2675.4806336999964,
+        "inventory_std": 0.003323360164038719,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 5914.635967960195,
+        "mean_abs_inventory": 0.0009470291091621726,
+        "mean_daily_pnl": -19.649953381927563,
+        "mean_end_inventory": -0.00033713621262458616,
+        "quote_to_fill": 442.1512559895455,
+        "sharpe_ci_high": -5.510993264350995,
+        "sharpe_ci_low": -8.70297046690785,
+        "strategy": "as_gamma_0.001",
+        "symbol": "BTCUSDT",
+        "total_net_pnl": -5914.6359679601965
+      },
+      {
+        "annualized_sharpe": -30.19633341360641,
+        "days": 301,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 643757.59618114,
+        "fill_count": 13826214,
+        "fill_ratio": 0.18167232525627583,
+        "filled_volume": 35181.481639000005,
+        "gross_pnl": -434025.40460434987,
+        "inventory_std": 0.028421037911020415,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 1077783.0007854905,
+        "mean_abs_inventory": 0.024749536713182273,
+        "mean_daily_pnl": -3580.6744212142517,
+        "mean_end_inventory": -0.0015711926910300443,
+        "quote_to_fill": 1.4006256521127187,
+        "sharpe_ci_high": -26.705942940094314,
+        "sharpe_ci_low": -36.52150986370515,
+        "strategy": "glft_gamma_0.0001",
+        "symbol": "BTCUSDT",
+        "total_net_pnl": -1077783.0007854898
+      },
+      {
+        "annualized_sharpe": -29.95624845915088,
+        "days": 301,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 644249.3027756797,
+        "fill_count": 13765443,
+        "fill_ratio": 0.07898068937770797,
+        "filled_volume": 35213.99054900001,
+        "gross_pnl": -436647.1394790501,
+        "inventory_std": 0.028264085532913763,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 1080896.4422547293,
+        "mean_abs_inventory": 0.024567473053664014,
+        "mean_daily_pnl": -3591.0180805804976,
+        "mean_end_inventory": -0.001753471760797506,
+        "quote_to_fill": 3.238949156957753,
+        "sharpe_ci_high": -26.49210971517572,
+        "sharpe_ci_low": -36.25653946200564,
+        "strategy": "glft_imbalance_gamma_0.001_beta_2",
+        "symbol": "BTCUSDT",
+        "total_net_pnl": -1080896.4422547298
+      },
+      {
+        "annualized_sharpe": -33.752693968177645,
+        "days": 301,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 902454.8612542562,
+        "fill_count": 16489122,
+        "fill_ratio": 0.2664228900973287,
+        "filled_volume": 50095.682520999995,
+        "gross_pnl": -646083.0995439513,
+        "inventory_std": 0.03083486083459709,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 1548537.9607982077,
+        "mean_abs_inventory": 0.027222796770506492,
+        "mean_daily_pnl": -5144.644388033913,
+        "mean_end_inventory": -0.00019206976744179418,
+        "quote_to_fill": 1.1403317896489578,
+        "sharpe_ci_high": -30.064755675525916,
+        "sharpe_ci_low": -39.869478475308014,
+        "strategy": "symmetric",
+        "symbol": "BTCUSDT",
+        "total_net_pnl": -1548537.9607982077
+      },
+      {
+        "annualized_sharpe": -9.26168597282167,
+        "days": 43,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 57.0658477664,
+        "fill_count": 12013,
+        "fill_ratio": 0.001833662800233965,
+        "filled_volume": 85.75577,
+        "gross_pnl": -57.87079845000011,
+        "inventory_std": 0.019145704539910036,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 114.93664621640012,
+        "mean_abs_inventory": 0.015772470114390216,
+        "mean_daily_pnl": -2.672945260846514,
+        "mean_end_inventory": 0.0001713953488372179,
+        "quote_to_fill": 389.3071672354949,
+        "sharpe_ci_high": -6.261526335341859,
+        "sharpe_ci_low": -13.50894897744603,
+        "strategy": "as_gamma_0.001",
+        "symbol": "ETHUSDT",
+        "total_net_pnl": -114.9366462164001
+      },
+      {
+        "annualized_sharpe": -21.850096712920497,
+        "days": 43,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 930.1723819502,
+        "fill_count": 188491,
+        "fill_ratio": 0.031168119074086946,
+        "filled_volume": 1335.2179100000003,
+        "gross_pnl": -696.3474161499997,
+        "inventory_std": 0.030699754680806872,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 1626.5197981001995,
+        "mean_abs_inventory": 0.02780408001784804,
+        "mean_daily_pnl": -37.82604181628371,
+        "mean_end_inventory": 0.0014495348837210017,
+        "quote_to_fill": 22.727461788626513,
+        "sharpe_ci_high": -16.423062036985794,
+        "sharpe_ci_low": -33.081401184203294,
+        "strategy": "glft_gamma_0.0001",
+        "symbol": "ETHUSDT",
+        "total_net_pnl": -1626.5197981001998
+      },
+      {
+        "annualized_sharpe": -22.407455784768853,
+        "days": 43,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 771.7552704528001,
+        "fill_count": 159320,
+        "fill_ratio": 0.011717480025151574,
+        "filled_volume": 1124.9321000000002,
+        "gross_pnl": -626.2984207000002,
+        "inventory_std": 0.03038760282953181,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 1398.0536911528002,
+        "mean_abs_inventory": 0.02788462236302057,
+        "mean_daily_pnl": -32.51287653843722,
+        "mean_end_inventory": 0.0057962790697674025,
+        "quote_to_fill": 60.25898192317349,
+        "sharpe_ci_high": -17.146229246609504,
+        "sharpe_ci_low": -32.367541560385895,
+        "strategy": "glft_imbalance_gamma_0.001_beta_2",
+        "symbol": "ETHUSDT",
+        "total_net_pnl": -1398.0536911528004
+      },
+      {
+        "annualized_sharpe": -40.174818958582485,
+        "days": 43,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 8581.8751738056,
+        "fill_count": 2063666,
+        "fill_ratio": 0.2879516072312165,
+        "filled_volume": 13256.3216,
+        "gross_pnl": -6378.954057499996,
+        "inventory_std": 0.029579935318189206,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 14960.8292313056,
+        "mean_abs_inventory": 0.025801491824524455,
+        "mean_daily_pnl": -347.92626119315344,
+        "mean_end_inventory": -0.012101395348833626,
+        "quote_to_fill": 2.2308178745979244,
+        "sharpe_ci_high": -33.4824019497685,
+        "sharpe_ci_low": -55.572388387512554,
+        "strategy": "symmetric",
+        "symbol": "ETHUSDT",
+        "total_net_pnl": -14960.829231305597
+      },
+      {
+        "annualized_sharpe": -9.968132066393727,
+        "days": 16,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 1.311935392,
+        "fill_count": 3437,
+        "fill_ratio": 0.009192134437463835,
+        "filled_volume": 34.078,
+        "gross_pnl": -1.2159599999999928,
+        "inventory_std": 0.02807209194498947,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 2.858961591999993,
+        "mean_abs_inventory": 0.027151886272328438,
+        "mean_daily_pnl": -0.15799346199999958,
+        "mean_end_inventory": -0.0015999999999998914,
+        "quote_to_fill": 107.86441664242072,
+        "sharpe_ci_high": -5.2295056407813,
+        "sharpe_ci_low": -16.848808145617642,
+        "strategy": "as_gamma_0.001",
+        "symbol": "SOLUSDT",
+        "total_net_pnl": -2.5278953919999934
+      },
+      {
+        "annualized_sharpe": -14.214939594921592,
+        "days": 16,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 1.7056822980000006,
+        "fill_count": 4502,
+        "fill_ratio": 0.012166931255902073,
+        "filled_volume": 44.60470000000001,
+        "gross_pnl": -1.798947500000029,
+        "inventory_std": 0.029096274627402302,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 3.82246059800003,
+        "mean_abs_inventory": 0.028551968322525306,
+        "mean_daily_pnl": -0.21903936237500185,
+        "mean_end_inventory": 0.0004812499999996586,
+        "quote_to_fill": 81.43180808529543,
+        "sharpe_ci_high": -6.7624672934166625,
+        "sharpe_ci_low": -23.78828488300249,
+        "strategy": "glft_gamma_0.0001",
+        "symbol": "SOLUSDT",
+        "total_net_pnl": -3.5046297980000296
+      },
+      {
+        "annualized_sharpe": -28.213042522011904,
+        "days": 16,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 3.5242566680000005,
+        "fill_count": 9577,
+        "fill_ratio": 0.0033642630726502323,
+        "filled_volume": 94.40610000000001,
+        "gross_pnl": -3.908805499999864,
+        "inventory_std": 0.02055124803561572,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 7.433062167999864,
+        "mean_abs_inventory": 0.035537223790760915,
+        "mean_daily_pnl": -0.4645663854999915,
+        "mean_end_inventory": -0.01955625000000031,
+        "quote_to_fill": 293.00877101388744,
+        "sharpe_ci_high": -23.934439604611786,
+        "sharpe_ci_low": -42.295805526756,
+        "strategy": "glft_imbalance_gamma_0.001_beta_2",
+        "symbol": "SOLUSDT",
+        "total_net_pnl": -7.433062167999864
+      },
+      {
+        "annualized_sharpe": -44.91095701793473,
+        "days": 16,
+        "deflated_sharpe_ratio": 0.0,
+        "fees": 29.690034642,
+        "fill_count": 81828,
+        "fill_ratio": 0.21117314485788222,
+        "filled_volume": 806.4089999999999,
+        "gross_pnl": -26.333241000000058,
+        "inventory_std": 0.03082458111939653,
+        "max_abs_inventory": 0.05,
+        "max_drawdown": 56.02327564200007,
+        "mean_abs_inventory": 0.027719407310518404,
+        "mean_daily_pnl": -3.501454727625004,
+        "mean_end_inventory": 0.007362499999996124,
+        "quote_to_fill": 4.666752211956787,
+        "sharpe_ci_high": -40.30008264366344,
+        "sharpe_ci_low": -62.22225478518607,
+        "strategy": "symmetric",
+        "symbol": "SOLUSDT",
+        "total_net_pnl": -56.023275642000065
+      }
+    ],
+    "runtime_seconds": 19477.643719542015,
+    "selected_strategies": [
+      {
+        "beta": null,
+        "gamma": null,
+        "kind": "symmetric"
+      },
+      {
+        "beta": null,
+        "gamma": 0.001,
+        "kind": "as"
+      },
+      {
+        "beta": null,
+        "gamma": 0.0001,
+        "kind": "glft"
+      },
+      {
+        "beta": 2.0,
+        "gamma": 0.001,
+        "kind": "glft_imbalance"
+      }
+    ],
+    "selection_dates": [
+      "2025-05-02",
+      "2025-05-06",
+      "2025-05-07",
+      "2025-05-08",
+      "2025-05-09",
+      "2025-05-10",
+      "2025-05-11",
+      "2025-05-12",
+      "2025-05-13",
+      "2025-05-14",
+      "2025-05-15",
+      "2025-05-16",
+      "2025-05-17",
+      "2025-05-18",
+      "2025-05-19",
+      "2025-05-20",
+      "2025-05-21",
+      "2025-05-22",
+      "2025-05-23",
+      "2025-05-24",
+      "2025-05-25",
+      "2025-05-26",
+      "2025-05-27",
+      "2025-05-28",
+      "2025-05-29",
+      "2025-05-30",
+      "2025-05-31",
+      "2025-06-01",
+      "2025-06-02",
+      "2025-06-03",
+      "2025-06-04",
+      "2025-06-05",
+      "2025-06-06",
+      "2025-06-07",
+      "2025-06-08",
+      "2025-06-09",
+      "2025-06-10",
+      "2025-06-11",
+      "2025-06-12",
+      "2025-06-13",
+      "2025-06-14",
+      "2025-06-15",
+      "2025-06-16",
+      "2025-06-17",
+      "2025-06-18",
+      "2025-06-19",
+      "2025-06-20",
+      "2025-06-21",
+      "2025-06-22",
+      "2025-06-23",
+      "2025-06-24",
+      "2025-06-25",
+      "2025-06-26",
+      "2025-06-27",
+      "2025-06-28",
+      "2025-06-29",
+      "2025-06-30"
+    ],
+    "selection_trial_count": 31,
+    "selection_trial_sharpes": [
+      {
+        "annualized_sharpe": -45.0686834109218,
+        "strategy": "symmetric"
+      },
+      {
+        "annualized_sharpe": -28.170005957733732,
+        "strategy": "as_gamma_1e-05"
+      },
+      {
+        "annualized_sharpe": -18.26926633586745,
+        "strategy": "as_gamma_5e-05"
+      },
+      {
+        "annualized_sharpe": -15.682120285217,
+        "strategy": "as_gamma_0.0001"
+      },
+      {
+        "annualized_sharpe": -11.1965996409906,
+        "strategy": "as_gamma_0.0005"
+      },
+      {
+        "annualized_sharpe": -9.705994256452565,
+        "strategy": "as_gamma_0.001"
+      },
+      {
+        "annualized_sharpe": -38.83102762374151,
+        "strategy": "glft_gamma_1e-05"
+      },
+      {
+        "annualized_sharpe": -38.849558495168836,
+        "strategy": "glft_gamma_5e-05"
+      },
+      {
+        "annualized_sharpe": -38.82235742530973,
+        "strategy": "glft_gamma_0.0001"
+      },
+      {
+        "annualized_sharpe": -38.84738568651242,
+        "strategy": "glft_gamma_0.0005"
+      },
+      {
+        "annualized_sharpe": -38.83439689246101,
+        "strategy": "glft_gamma_0.001"
+      },
+      {
+        "annualized_sharpe": -38.739949700303164,
+        "strategy": "glft_imbalance_gamma_1e-05_beta_0.5"
+      },
+      {
+        "annualized_sharpe": -38.76842705049331,
+        "strategy": "glft_imbalance_gamma_1e-05_beta_1"
+      },
+      {
+        "annualized_sharpe": -38.68352794238055,
+        "strategy": "glft_imbalance_gamma_1e-05_beta_2"
+      },
+      {
+        "annualized_sharpe": -38.64189816118268,
+        "strategy": "glft_imbalance_gamma_1e-05_beta_4"
+      },
+      {
+        "annualized_sharpe": -38.811467782388775,
+        "strategy": "glft_imbalance_gamma_5e-05_beta_0.5"
+      },
+      {
+        "annualized_sharpe": -38.7311201030547,
+        "strategy": "glft_imbalance_gamma_5e-05_beta_1"
+      },
+      {
+        "annualized_sharpe": -38.68676729280864,
+        "strategy": "glft_imbalance_gamma_5e-05_beta_2"
+      },
+      {
+        "annualized_sharpe": -38.68316357389135,
+        "strategy": "glft_imbalance_gamma_5e-05_beta_4"
+      },
+      {
+        "annualized_sharpe": -38.74061778909022,
+        "strategy": "glft_imbalance_gamma_0.0001_beta_0.5"
+      },
+      {
+        "annualized_sharpe": -38.72085365458147,
+        "strategy": "glft_imbalance_gamma_0.0001_beta_1"
+      },
+      {
+        "annualized_sharpe": -38.689982279254956,
+        "strategy": "glft_imbalance_gamma_0.0001_beta_2"
+      },
+      {
+        "annualized_sharpe": -38.67745173316634,
+        "strategy": "glft_imbalance_gamma_0.0001_beta_4"
+      },
+      {
+        "annualized_sharpe": -38.74594129823844,
+        "strategy": "glft_imbalance_gamma_0.0005_beta_0.5"
+      },
+      {
+        "annualized_sharpe": -38.744780229346105,
+        "strategy": "glft_imbalance_gamma_0.0005_beta_1"
+      },
+      {
+        "annualized_sharpe": -38.677379132164994,
+        "strategy": "glft_imbalance_gamma_0.0005_beta_2"
+      },
+      {
+        "annualized_sharpe": -38.633230905802215,
+        "strategy": "glft_imbalance_gamma_0.0005_beta_4"
+      },
+      {
+        "annualized_sharpe": -38.725685209139094,
+        "strategy": "glft_imbalance_gamma_0.001_beta_0.5"
+      },
+      {
+        "annualized_sharpe": -38.68138206560878,
+        "strategy": "glft_imbalance_gamma_0.001_beta_1"
+      },
+      {
+        "annualized_sharpe": -38.58640361872743,
+        "strategy": "glft_imbalance_gamma_0.001_beta_2"
+      },
+      {
+        "annualized_sharpe": -38.640522344690375,
+        "strategy": "glft_imbalance_gamma_0.001_beta_4"
+      }
+    ],
+    "skipped_selection_dates": [],
+    "skipped_test_dates": [
+      {
+        "calibration_date": "2025-07-01",
+        "date": "2025-07-02",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-07-08",
+        "date": "2025-07-09",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-07-15",
+        "date": "2025-07-16",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-08-12",
+        "date": "2025-08-13",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-08-19",
+        "date": "2025-08-20",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-08-26",
+        "date": "2025-08-27",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-09-02",
+        "date": "2025-09-03",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-09-23",
+        "date": "2025-09-24",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-12-16",
+        "date": "2025-12-17",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-12-23",
+        "date": "2025-12-24",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2025-12-30",
+        "date": "2025-12-31",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-01-06",
+        "date": "2026-01-07",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-01-13",
+        "date": "2026-01-14",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-01-20",
+        "date": "2026-01-21",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-01-27",
+        "date": "2026-01-28",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-02-03",
+        "date": "2026-02-04",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-02-10",
+        "date": "2026-02-11",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-02-17",
+        "date": "2026-02-18",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-02-24",
+        "date": "2026-02-25",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-03-03",
+        "date": "2026-03-04",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-03-10",
+        "date": "2026-03-11",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-03-17",
+        "date": "2026-03-18",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-03-24",
+        "date": "2026-03-25",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-03-31",
+        "date": "2026-04-01",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-04-07",
+        "date": "2026-04-08",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-04-14",
+        "date": "2026-04-15",
+        "symbol": "SOLUSDT"
+      },
+      {
+        "calibration_date": "2026-04-21",
+        "date": "2026-04-22",
+        "symbol": "SOLUSDT"
+      }
+    ]
+  },
+  "external_crosscheck": {
+    "dates": [
+      "2025-07-07",
+      "2025-08-04",
+      "2025-10-06",
+      "2026-01-05",
+      "2026-04-06"
+    ],
+    "row_count": 10
+  },
+  "lobster_appendix": {
+    "included_symbols": [
+      "AAPL"
+    ],
+    "missing_symbols": [
+      "AMZN",
+      "GOOG",
+      "INTC",
+      "MSFT"
+    ],
+    "row_count": 4
+  },
+  "queue_validation": {
+    "arms": [
+      {
+        "latency_ms": 10,
+        "name": "touch_10ms",
+        "offset_ticks": 0
+      },
+      {
+        "latency_ms": 50,
+        "name": "touch_50ms",
+        "offset_ticks": 0
+      },
+      {
+        "latency_ms": 50,
+        "name": "off_2_ticks_50ms",
+        "offset_ticks": 2
+      },
+      {
+        "latency_ms": 50,
+        "name": "off_8_ticks_50ms",
+        "offset_ticks": 8
+      }
+    ],
+    "dates": [
+      "2025-01-06",
+      "2025-01-07"
+    ],
+    "selected_rule": "cancel-from-back"
+  },
+  "runtime_seconds": 20361.023674583004
+}

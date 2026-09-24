@@ -1,148 +1,261 @@
-# P2 Research Memo — Avellaneda-Stoikov Market Maker
+# Market Making on Real Limit Order Books: A Preregistered Negative Result
 
-## Interview-Ready Conclusion
-I implemented Avellaneda-Stoikov optimal quoting with a Glosten-Milgrom adverse-selection layer, validated it against one free-sample day of LOBSTER top-10 book data, and ablated it against four baseline quoters inside one shared execution engine. On the checked-in AAPL 2012-06-21 replay, the disciplined quote rules all reproduce essentially the same validated baseline: about `$662` terminal PnL on `972` fills with about `7.9%` replay spread capture. The main contribution is not a claim of deployable profitability. The contribution is a defensible research artifact: the HJB derivation, Ho-Stoll foundation, queue-reactive extension, and Glosten-Milgrom coupling are written up in `docs/hjb_derivation.md`; the synthetic and replay paths use one accounting convention; and the memo states plainly where realism still breaks, especially the one-day LOBSTER sample, uncalibrated `mu`, and missing joint queue-plus-information control.
+## Abstract
 
-## Introduction / Problem Statement
-Avellaneda-Stoikov solves the canonical market-making control problem: a dealer wants to earn the bid-ask spread, but every passive fill changes inventory, and inventory is risky over the remaining trading horizon. That is a natural quantitative-research interview topic because it sits at the intersection of stochastic control, microstructure, simulation, and model skepticism. A candidate can derive the core HJB, implement the quoting rule, compare it against weaker baselines, and then explain what breaks when the stylized assumptions meet market data.
+Four quoting rules were preregistered and tested on 301 days of Bybit BTCUSDT
+perpetual order-book data, with robustness runs on ETHUSDT and SOLUSDT, queue
+validation against order-level CME futures data, an independent replay engine,
+and an equity appendix. All four lose money, at every fee and latency setting in
+the grid, with annualised Sharpe ratios between -6.5 and -33.8 and a deflated
+Sharpe ratio of zero across 31 trials. The loss is not primarily the exchange
+fee. On BTCUSDT the quoted spread is about 0.01 basis points of notional, while
+one-second adverse selection costs 0.30 to 0.41 basis points and the VIP0 maker
+fee is 2.0 basis points. The spread is roughly two orders of magnitude too thin
+to pay for either. The same engine on a 2012 AAPL sample, where the quoted width
+is about 2 basis points and the maker side earns a rebate, turns positive. The
+result is therefore about the venue's economics rather than about the quoting
+rules.
 
-That is the lens for P2. The project is not trying to beat the market in one backtest. It is trying to answer the more defensible question: can I implement the Avellaneda-Stoikov quoting rule correctly, calibrate its primitives from a real top-of-book dataset, and explain how inventory risk, queue position, and adverse selection should interact in a realistic market-maker stack? Week 1 added a Glosten-Milgrom information layer, Week 2 added a cross-symbol ablation pipeline and replay smoke, and Week 3 packages the mathematics and the research readout into one coherent memo.
+## Question
 
-This memo therefore does three things. First, it states the control problem and points to the full derivation without duplicating it. Second, it summarizes what the synthetic engine and the LOBSTER replay actually show. Third, it records the limitations honestly: one checked-in day of AAPL is enough to validate implementation plumbing, not enough to claim robust alpha.
+Fixed before any result was computed, in `docs/preregistration.md`:
 
-## Model
-The full mathematics now live in `docs/hjb_derivation.md`. In words, the repo combines three layers. The first layer is the closed-form Avellaneda-Stoikov solution: Brownian mid-price, exponentially decaying fill intensities, reservation price `S - q * gamma * sigma^2 * (T - t)`, and optimal spread `gamma * sigma^2 * (T - t) + (2 / gamma) * log(1 + gamma / kappa)`. The second layer is a queue-reactive correction in the Huang-Lehalle-Rosenbaum style, implemented in `src/p2/queue.py`, where execution quality depends on queue depth and FIFO position rather than on quote distance alone. The third layer is a Glosten-Milgrom adverse-selection filter in `src/p2/glosten_milgrom.py`, where a fraction `mu` of traders are informed, order flow updates a posterior over latent value, and that posterior tilts effective buy and sell intensities. The memo uses the closed form as the base policy, the queue layer as a realistic correction, and the GM layer as the Week 1 information-sensitive extension.
+> On real limit order books, does inventory-aware quoting (Avellaneda-Stoikov,
+> GLFT) plus a short-horizon order-flow skew earn positive net PnL after queue
+> position, latency, fees and adverse selection? How much of the naive spread
+> capture do markouts eat?
 
-Operationally, the most important implementation choice is that AVS and all baselines share one execution engine. That matters more than it sounds. It means differences in PnL or fill counts come from the quote logic rather than from inconsistent accounting, different adverse-selection handling, or different inventory clamps.
+The preregistration fixes the strategies and their parameter grids, the
+calibration protocol, the walk-forward split, the cost and latency grid, the
+metrics, and the rule for choosing between queue approximations. Three
+amendments were made after the study was built, each recorded with the
+measurement that prompted it and a before-and-after table. None of them was
+made after seeing a test-window result.
 
-## Synthetic Simulator Check
-The default synthetic run remains the cleanest implementation sanity check because every parameter is controlled:
+## Data
 
-- `sigma = 1.0`
-- `gamma = 0.1`
-- `kappa = 1.5`
-- `A = 140.0`
-- `T = 1.0`
-- `dt = 0.001`
-- `Q_max = 10`
-- `epsilon = 0.02`
-- `n_paths = 1000`
-- seed `42`
+| Source | Coverage | Role |
+| --- | --- | --- |
+| Bybit perpetual L2 book and trades | BTCUSDT, ETHUSDT, SOLUSDT, 2025-05-01 to 2026-04-27 | Main study |
+| Databento CME MBO, ES.c.0 | 2025-01-06 and 2025-01-07, order level | Queue validation |
+| LOBSTER level-10 sample, AAPL | 2012-06-21 | Equity appendix |
 
-Results from `results/default_synthetic/summary.json`:
+The Bybit feed arrives as snapshot and delta messages carrying 200 price levels
+per side. Reconstruction replays them into a price-keyed book, requires
+`update_id` to advance by one between deltas, marks the book invalid from any
+gap until the next snapshot, asserts the book is never crossed, and caches the
+top 20 levels per side merged with the trade stream. Across all 532
+reconstructed symbol-days the crossed-book count is zero, there are no
+sequence gaps, and 870 seconds in total are marked invalid.
 
-| Strategy | Mean terminal PnL | PnL std | Sharpe | Avg abs inventory | Spread capture |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| AVS | 64.5116 | 6.6831 | 9.6530 | 2.0828 | 67.7794 |
-| Symmetric | 60.1049 | 7.7000 | 7.8058 | 4.4297 | 61.7990 |
-| Constant spread | 63.4168 | 8.5089 | 7.4530 | 4.2453 | 64.7849 |
+Parameters for trading day `d` come only from day `d-1`: sigma from one-second
+midpoint changes, and `A` and `kappa` from an ordinary least squares fit of
+`log lambda(delta) = log A - kappa delta` over a fixed 20-point depth grid. A
+date without a valid preceding-day calibration is excluded and recorded; 27 test
+dates were excluded this way, all of them SOLUSDT, which is why SOLUSDT
+contributes 16 days against ETHUSDT's 43.
 
-This is still the right first check on the implementation. AVS earns slightly higher mean PnL than the simpler baselines, but the stronger point is that it cuts average absolute inventory roughly in half. That is the mechanism the theory is supposed to deliver. The reservation-price term does not exist to maximize raw spread capture mechanically; it exists to move the quote center away from the mid when inventory becomes risky.
+## Engine and fill model
 
-The synthetic parameter sweep tells the same story in a broader grid. The best cells in `results/default_synthetic/cuda_sweep.csv` occur at lower volatility and longer horizon, where spread capture compounds while diffusion risk stays manageable. That sweep is useful for structural sensitivity analysis. It is not evidence that any specific parameter combination would survive real market frictions.
+The replay is event driven. Quotes are post-only: one that would be marketable
+when it becomes effective is repriced one tick inside the opposite touch, so no
+preregistered path can take liquidity, and the published marketable-fill count
+is zero everywhere. Submission, cancellation and replacement take effect after
+50 ms, and a replacement loses queue priority. Quotes are reconsidered at most
+every 100 ms. Inventory is bounded to plus or minus 0.05 BTC by suppressing the
+side that would breach it, and nothing is flattened at day end.
 
-## Empirical Calibration on AAPL 2012-06-21
-The checked-in replay artifact is built from the free LOBSTER AAPL top-10 sample stored under `data/lobster/`. All five quoter rows in `results/cross_symbol_ablation/cross_symbol_ablation.csv` use the same calibrated constants because they replay the same AAPL book and message files. The calibration estimates are:
+Two parts of the fill model deserve stating explicitly, because both were
+corrected during the build and both materially change the answer.
 
-| Date | Symbol | `sigma` | `A` | `kappa` | `epsilon` |
+**Fills follow traded volume.** Bybit prints one row per matched price level,
+best price first: measured over three sample days, 15 to 19 per cent of
+same-millisecond same-side trade groups span more than one price, with a median
+of five rows. Aggressor volume is therefore observable level by level. A trade
+at or through our price clears the queue ahead using its own volume and fills
+only the residual. A genuine sweep still fills the order completely, but through
+volume that actually traded rather than by assumption.
+
+**Placement has three states.** A quote price carrying displayed size puts us
+behind it. A price inside the reconstructed window with no displayed size leaves
+us alone at the front of an empty level. A price deeper than the deepest
+reconstructed level has an unknown queue, and there the replay refuses to claim
+a fill at all rather than inventing a position. The three counts are published
+per strategy-day, and they matter: 88 per cent of GLFT quotes rest on empty
+levels inside the book, while 99 per cent of Avellaneda-Stoikov quotes fall
+beyond it.
+
+## Results
+
+Selection ran on 2025-05-01 to 2025-06-30 across 31 trials and locked four
+strategies. Every one of the 31 trials had a negative selection-window Sharpe,
+ranging from -9.7 to -45.1, so the selection step chose the least bad rather
+than a promising one. The test window, 2025-07-01 to 2026-04-27, was then run
+once.
+
+BTCUSDT, 301 days, maker 0.020 per cent, latency 50 ms:
+
+| Strategy | Net PnL | Ann. Sharpe | 95% CI | DSR | Fills | Gross, bp | Profitable days |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| symmetric touch | -1,548,538 | -33.75 | [-39.87, -30.06] | 0.00 | 16,489,122 | -1.29 | 0 |
+| GLFT, gamma 1e-4 | -1,077,783 | -30.20 | [-36.52, -26.71] | 0.00 | 13,826,214 | -1.23 | 0 |
+| GLFT + imbalance, beta 2 | -1,080,896 | -29.96 | [-36.26, -26.49] | 0.00 | 13,765,443 | -1.24 | 0 |
+| Avellaneda-Stoikov, gamma 1e-3 | -5,915 | -6.53 | [-8.70, -5.51] | 0.00 | 68,870 | -1.52 | 17 |
+
+Three of the four lose money on every single one of the 301 days. This is not a
+strategy with a bad Sharpe; it is a strategy with a deterministic leak. ETHUSDT
+and SOLUSDT reproduce the pattern on their weekly samples, with symmetric at
+-40.2 and -44.9 annualised Sharpe respectively.
+
+The decomposition shows where it goes:
+
+| Strategy | Realized spread | Inventory revaluation | Fees | Net |
+| --- | ---: | ---: | ---: | ---: |
+| symmetric touch | -78,217 | -567,866 | 902,455 | -1,548,538 |
+| GLFT, gamma 1e-4 | 58,955 | -492,981 | 643,758 | -1,077,783 |
+| GLFT + imbalance | 60,528 | -497,175 | 644,249 | -1,080,896 |
+| Avellaneda-Stoikov | 659 | -3,335 | 3,239 | -5,915 |
+
+Fees are published as a positive magnitude, so net is realized spread plus
+inventory revaluation minus fees.
+
+The symmetric quoter's realized spread is negative, at -0.047 basis points per
+fill. A quoter joining the touch should buy below the midpoint and sell above
+it, so a negative realized spread is worth pausing on. It is the signature of
+being picked off: with a 100 ms requote floor and 50 ms of latency, the fills it
+receives are disproportionately those where the midpoint has already moved
+through its quote. GLFT rests about 4 USDT off the midpoint and realises only
++0.043 basis points, meaning the midpoint has travelled almost the whole way to
+its quote by the time it trades. Signed markouts confirm this directly: negative
+at every horizon for every strategy, with most of the damage inside one second.
+
+Set against those numbers, the BTCUSDT quoted spread is about 0.01 basis points.
+The arithmetic is not close.
+
+## Queue-model validation
+
+The crypto book is level-two data, so queue position is modelled. The ES study
+replays the same quoting logic against order-level MBO, where a hypothetical
+resting order's fill times follow exactly from the fills and cancels ahead of
+it, and compares that truth against the two level-two approximations. Four arms
+were run: the preregistered touch arm at 10 ms, the same at 50 ms to match the
+crypto study, and quotes two and eight ticks off the midpoint at 50 ms, because
+a validation that never leaves the touch says nothing about strategies that
+quote away from it.
+
+| Arm | Method | Fills | Fill-count bias | Gross PnL | Error vs exact |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 2012-06-21 | AAPL | 0.044287 | 0.258100 | 25.373720 | 0.001322 |
+| touch, 10 ms | exact FIFO | 68,478 | - | -73,262 | - |
+| touch, 10 ms | L2 cancel-from-back | 68,774 | +0.4% | -82,312 | -9,050 |
+| touch, 10 ms | L2 proportional | 93,363 | +36.3% | -76,894 | -3,631 |
+| touch, 50 ms | exact FIFO | 63,198 | - | -75,462 | - |
+| touch, 50 ms | L2 cancel-from-back | 63,372 | +0.3% | -84,487 | -9,025 |
+| 2 ticks off, 50 ms | exact FIFO | 1,336 | - | +3,175 | - |
+| 2 ticks off, 50 ms | L2 cancel-from-back | 1,400 | +4.8% | +1,187 | -1,987 |
 
-These numbers are informative, but they should be read narrowly.
+Cancel-from-back was chosen by the preregistered rule on the preregistered arm,
+before the crypto study ran. It overstates the gross loss by 12.4 per cent of
+the exact value at the touch. The honest reading is that the headline losses are
+biased away from zero by roughly an eighth, which does not come close to
+changing the conclusion. The eight-ticks-off arm produced twelve fills across
+two days, which is itself informative: on ES, quoting that far out essentially
+never trades.
 
-`sigma = 0.044287` is an intraday top-of-book diffusion estimate, not a robust daily volatility parameter. `A = 0.258100` is a low baseline arrival scale because the replay abstraction only sees top-of-book fills and does not reconstruct full venue liquidity. `kappa = 25.373720` is steep, which means fill probability decays quickly with quote distance; small changes in placement matter a lot. `epsilon = 0.001322` is small in price units, but it still matters because replay PnL is also measured in small price increments per fill. The honest read is that these are usable local constants for one AAPL sample day, not portable market constants.
+## Independent engine
 
-That last point matters for interpretation. Because all quoters share the same calibration and the replay is top-of-book only, the replay is better at checking internal consistency than at separating subtly different quoting policies. It is very good for answering "did the code use the same market assumptions across strategies?" It is not yet good for answering "which strategy is robustly better across days and symbols?"
+The same five days were replayed through the external `hftbacktest` package with
+queue models matched, both advancing a resting order only on traded volume.
+Fill counts differ by 4.7 to 32.2 per cent on the symmetric strategy and 35.9 to
+66.0 per cent on GLFT, with the external engine consistently more conservative.
+One modelling difference remains and explains the direction: the external
+exchange fills our single 0.01 BTC order all or nothing, while the native engine
+permits a partial fill. That bites hardest on GLFT, which rests away from the
+touch where passing volume is thinner. Both engines agree on sign and scale.
 
-That distinction is why the next data purchase would matter more than another round of parameter tuning. Multi-day LOBSTER would let the same calibration pipeline answer questions that the current artifact cannot: whether `kappa` is stable across sessions, whether `epsilon` changes materially around open and close, whether inventory-skewed quoters fail only on this AAPL path or systematically across names, and whether the random-quoter outperformance disappears once luck is averaged out. Without that panel dimension, the right scientific stance is implementation validation, not performance extrapolation.
-That is the difference between a credible research memo and a one-day anecdote.
+## Robustness
 
-## Cross-Symbol Ablation (Week 2 Deliverable)
-The Week 2 design originally aimed for a multi-day robustness panel. The free LOBSTER constraint forced a methodology pivot documented in `docs/ablation_report.md`: use a shared date across symbols when data are available, and treat the result as a cross-sectional sanity check rather than a time-series robustness claim. In the checked-in repo artifact, the pipeline is present, but the recorded result is the AAPL smoke only: five rows, one per quoter, all for `2012-06-21`.
+Twelve cells were run: maker fees of -0.005, 0.000, 0.010 and 0.020 per cent
+against latencies of 10, 50 and 200 milliseconds. None is profitable. The best
+cell in the entire grid is the symmetric quoter at the rebate tier with 200 ms
+latency, at -387,341. At a zero fee the same strategy still loses 646,083 gross,
+so the exchange fee aggravates the result without causing it.
 
-The comparison table below pulls the actual metrics from `results/cross_symbol_ablation/cross_symbol_ablation.csv`.
+Latency behaves counterintuitively: more latency loses less. That is consistent
+with the pick-off story, since a slower quoter both trades less and keeps stale
+quotes that the market has already left, rather than chasing a midpoint that is
+moving away from it.
 
-| Quoter | Sharpe | Spread capture | Avg abs inventory | Bid fill rate | Ask fill rate | Replay terminal PnL | Replay spread capture | Replay fills |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `avs_optimal` | 0.2871 | 0.006931 | 0.080368 | 0.088 | 0.088 | 662.07 | 7.87% | 972 |
-| `constant_spread` | 0.3376 | 0.007926 | 0.100761 | 0.107 | 0.094 | 662.17 | 7.89% | 972 |
-| `inventory_linear` | 0.3379 | 0.006901 | 0.082401 | 0.093 | 0.082 | 13.55 | 7.89% | 846 |
-| `random` | 0.2676 | 0.007781 | 0.095107 | 0.124 | 0.100 | 742.95 | 6.11% | 1207 |
-| `symmetric` | 0.3231 | 0.006348 | 0.084112 | 0.082 | 0.079 | 662.17 | 7.89% | 972 |
+## Equity appendix
 
-Three points matter more than the raw ranking.
+The same engine on the public AAPL sample for 2012-06-21, under 2012 Nasdaq
+maker-rebate assumptions:
 
-First, AVS-optimal, symmetric, and constant-spread all collapse onto the same replay baseline: about `$662` terminal PnL on `972` fills with `7.9%` replay spread capture. That is not a failure of the experiment. It is a clue about the model and the data. All three quote rules are disciplined, all three use the same AAPL calibration, and the replay itself is top-of-book only with no queue priority or latency. Under those conditions, it is unsurprising that they land on essentially the same realized path.
+| Strategy | Net PnL | Fills | Quoted width | Realized spread |
+| --- | ---: | ---: | ---: | ---: |
+| symmetric touch | $16.80 | 1,970 | 1.99 bp | 1.55 bp |
+| GLFT, gamma 1e-4 | $19.29 | 836 | 2.23 bp | 1.98 bp |
+| Avellaneda-Stoikov | $9.55 | 342 | 3.66 bp | 1.69 bp |
+| GLFT + imbalance | -$15.03 | 805 | 2.25 bp | 1.84 bp |
 
-Second, `InventoryLinearMM` and `RandomQuoter` diverge for reasons that are easy to explain from the code. `InventoryLinearMM` uses a linear skew with `lambda_q = 1` in `src/p2/baselines.py`. Once `|q| > 0`, it widens one side and narrows the other aggressively. In replay that means it often becomes too one-sided too early, which protects inventory but gives up fills. The artifact shows exactly that failure mode: replay fills fall to `846`, and replay terminal PnL collapses to `$13.55`. The low replay average absolute inventory, `2.27`, is not evidence of superiority; it is evidence that the strategy stops trading the moment inventory pressure appears.
-
-Third, `RandomQuoter` posts the highest replay PnL, `$742.95`, but that is not an investable conclusion. The same row has the worst replay spread capture, `6.11%`, the highest replay average absolute inventory, `63.96`, and the most fills, `1207`. The correct reading is path luck. On this one day, random quote placement happened to harvest more gross PnL, but it did so with weaker spread quality and much larger inventory exposure. That is the opposite of the kind of result I would defend in an interview as a stable edge.
-
-The synthetic metrics in the same table should also be interpreted carefully. The Sharpe values, `0.268` to `0.338`, are close enough that I do not treat the ordering as meaningful on one AAPL calibration. They show that the five quoters live in the same rough operating regime under the shared simulator. They do not establish a robust cross-symbol winner. The honest conclusion for Week 2 is therefore narrow: the ablation pipeline works, the AAPL smoke reproduces the validated baseline, and the real ranking exercise still requires paid multi-day LOBSTER or a richer dataset such as ITCH or TAQ.
-
-That is still a useful result in interview terms. Many market-making projects fail at the boring part: the baseline cannot be reproduced twice, different strategies use slightly different execution rules, or the writeup quietly avoids explaining why a naive control beat the supposedly optimal one. This artifact does the opposite. It shows exactly where the disciplined quoters agree, exactly how the crude quoters fail, and exactly why one lucky random path is not enough to override microstructure intuition. That is a stronger research posture than presenting a noisier but less interpretable leaderboard.
-
-## Glosten-Milgrom Adverse-Selection Sensitivity (Week 1 Deliverable)
-The Week 1 extension adds the information asymmetry that the plain Avellaneda-Stoikov model leaves out. In `src/p2/glosten_milgrom.py`, a fraction `mu` of traders is informed about a latent binary value state. The market maker observes the sign of incoming trades and updates the posterior probability of the high-value state via Bayes.
-
-The clean way to understand the update is in log-odds form. Let
-`p_t = P(V = v_high | order flow up to t)` and
-`ell_t = log(p_t / (1 - p_t))`. A buy order adds
-`log((1 + mu) / (1 - mu))` to `ell_t`; a sell order subtracts the same amount. As
-`mu` rises, each trade carries more information, so the posterior swings faster
-for the same observed order-flow imbalance. That is exactly the adverse-selection
-story market makers care about: when flow is more informed, a streak of buys is
-not just inventory flow, it is evidence that your stale ask is too cheap.
-
-The repo currently couples that logic to AVS through intensity adjustment:
-
-- `lambda_buy = lambda_baseline * (1 - mu + 2 * mu * p_t)`
-- `lambda_sell = lambda_baseline * (1 - mu + 2 * mu * (1 - p_t))`
-
-When `p_t = 0.5`, the adjustment disappears and the model falls back to the plain
-AvS intensity. When `p_t > 0.5`, buy-side flow is more likely, so ask fills become
-more toxic and the dealer's subjective fair value shifts upward. In the language
-of the derivation appendix, the AVS reservation price and the GM posterior mean
-act on the same object. Inventory risk shifts the reservation price by
-`-q * gamma * sigma^2 * (T - t)`. Adverse selection shifts it by the posterior
-mean relative to the mid. Those effects are additive in the quoting rule even
-though they come from different economic channels.
-
-The practical sensitivity claim is therefore straightforward. As `mu` increases,
-the posterior responds more sharply to the same trade sequence, the effective
-intensities become more one-sided, and the economically sensible quoting response
-is more conservative. In a fully solved coupled HJB, that means a more skewed
-reservation price and effectively wider exposure against informed flow. In this
-repo, `mu` is still a scenario variable rather than a calibrated parameter, so the
-GM layer is best understood as a structurally correct adverse-selection extension,
-not yet as a production-ready estimate of toxicity.
-
-## Week 2 — 5-scenario regime sweep
-To keep the Week 2 "week-like" distribution story honest despite having only one checked-in LOBSTER day, I added a five-scenario sweep under `results/lobster_week_sweep/`. `scenario_0_base` is replay-anchored to the AAPL `2012-06-21` calibration and is forced to stay within a documented `+/-15%` tolerance of the checked-in baseline. Scenarios `1` through `4` are synthetic perturbations of that same calibration on the same AAPL event-time grid. They are not independent LOBSTER days.
-
-The sweep uses deterministic seeds `20260424` through `20260428` and reports cumulative PnL curves, inventory paths, max drawdown, per-minute Sharpe, and per-minute information ratio. The selected replay-consistent `gamma` is `0.006`, which reproduces the existing anchor almost exactly: `scenario_0_base` finishes at `$662.16` on `972` fills with `7.88%` spread capture, versus the checked-in `$662.07 / 972 / 7.87%`.
-
-| Scenario | Construction | Terminal PnL | Max DD | Sharpe | IR |
-| --- | --- | ---: | ---: | ---: | ---: |
-| `scenario_0_base` | AAPL replay anchor | 662.16 | 123.83 | 0.1242 | 0.1241 |
-| `scenario_1_high_vol` | `2x sigma` | 411.67 | 100.30 | 0.1281 | 0.1281 |
-| `scenario_2_low_vol` | `0.5x sigma` | 662.15 | 123.83 | 0.1242 | 0.1241 |
-| `scenario_3_thin_book` | `0.5x A`, `2x kappa` | 65.43 | 25.63 | 0.1035 | 0.1038 |
-| `scenario_4_adverse_selection` | `pi = 0.30` vs `0.10` | 627.90 | 177.16 | 0.1175 | 0.1176 |
-
-Three reads matter. First, the base anchor now gives the week story a defensible empirical reference point instead of pretending that five real LOBSTER days exist on disk. Second, the thin-book stress is the harshest liquidity shock: fills fall from `972` to `579`, spread capture is cut roughly in half, and terminal PnL drops to about `$65`. Third, the adverse-selection stress does not destroy gross PnL, but it produces the worst drawdown in the panel, `177.16`, which is exactly the kind of toxicity-sensitive behavior the Glosten-Milgrom extension is supposed to surface.
-
-The low-vol scenario lands almost on top of the base case. I would not over-interpret that as a robust invariance claim. It is a consequence of running a replay-anchored event-time sweep on one AAPL day where the quote threshold is already close to the historical trade prices. In other words, the sweep is useful as a regime-stress narrative and a sensitivity panel, not as evidence that calm-market performance is fully pinned down by one free-sample replay.
+One symbol on one day is not evidence of profitability, and it is not offered as
+such. Its value is as a control: the same code, the same fill model, the same
+inventory bounds, applied where the quoted width is about 2 basis points instead
+of 0.01 and the maker side is paid instead of charged, produces positive PnL.
+That isolates the venue's spread-to-cost ratio as the operative variable rather
+than any defect in the quoting logic.
 
 ## Limitations
-The main limitations are structural and should be stated directly.
 
-- The checked-in LOBSTER evidence is one trading day, `2012-06-21`, for one symbol, AAPL. That is enough to validate the replay and calibration path, not enough to claim cross-day robustness.
-- The replay is top-of-book only. There is no venue fragmentation, latency model, partial-fill model, or true queue-priority reconstruction.
-- The queue-reactive machinery exists in `src/p2/queue.py`, but it is not yet jointly solved with the Glosten-Milgrom information layer inside one coupled control problem.
-- The GM informed-trader fraction `mu` is not calibrated from data in this session. It is treated as a scenario parameter.
-- Independent Poisson fill intensities remain a stylized approximation even after the queue and GM corrections.
-- Spread capture in simulation is still optimistic relative to a live venue with competing market makers, cancellations, and stale-quote risk.
-- None of these artifacts should be read as evidence of deployable profitability.
+The Avellaneda-Stoikov arm should be read narrowly. Its rolling horizon of
+86,400 seconds was preregistered, and at the calibrated volatility the
+`gamma sigma^2 tau / 2` term puts its half-spread near 447 USDT at session
+start, roughly 41 basis points. 99.2 per cent of its quotes land beyond the
+reconstructed 20-level book, where the replay declines to fill. It is reported
+as preregistered rather than retuned after the fact, but its numbers describe
+that parameterisation, not inventory-aware quoting in general.
 
-That is the right boundary for the project. The repo is strong as a QR interview artifact because it combines mathematical derivation, reproducible code, and an honest account of what the replay can and cannot support. It would stop being strong if it pretended that one free-sample AAPL day settled the strategy question.
+The queue approximation overstates the gross loss by about an eighth, measured
+on two ES days. ES is not Bybit and two days is not a distribution.
+
+The reconstruction keeps 20 levels per side, so quotes deeper than that cannot
+fill at all. This binds on one of the four arms.
+
+Counterfactual replay ignores our own market impact. A resting order that would
+have absorbed an aggressor changes nothing about the recorded tape, so every
+fill is measured against a world in which we were not there.
+
+The book and trade feeds are independent channels, and 38.8 per cent of the 427
+million trade events print outside the best bid or ask of the last preceding
+book snapshot. Some of that is genuine sweeping through multiple levels and some
+is the book update lagging the trade that caused it; the reconstruction does not
+separate the two. It bounds how precisely any fill in this study can be timed
+against the state of the book, and it is published per day alongside the gap and
+crossed-book counts.
+
+Funding payments are excluded because the event stream does not carry them, the
+study covers a single venue and a single contract, and the equity appendix
+covers one symbol because the LOBSTER sample host no longer serves the other
+four archives.
+
+## Conclusion
+
+The preregistered question has a clean negative answer on this venue.
+Inventory-aware quoting with an order-flow skew does not earn positive net PnL
+on BTCUSDT after queue position, latency, fees and adverse selection, and
+markouts eat far more than the naive spread capture: about 0.3 basis points
+within one second against a quoted spread near 0.01. The ordering of the
+strategies is consistent with the mechanism rather than with noise, since the
+rules that rest further from the touch and trade less lose less.
+
+What the study does not say is that market making on BTCUSDT is impossible. It
+says that continuous two-sided quoting at or near the touch, at a retail fee
+tier, with a 100 millisecond requote floor and 50 millisecond latency, is a
+losing configuration by a wide margin, and it quantifies each term in that
+margin. A maker who quotes selectively, holds a materially better fee tier, or
+operates inside the exchange's colocation latency is outside what was measured
+here.
+
+The more transferable output is the measurement apparatus: a fill model whose
+assumptions are stated and whose error against order-level truth is quantified,
+a second engine that agrees on sign and scale, and a preregistration that fixed
+the 31 trials before any of them ran.
