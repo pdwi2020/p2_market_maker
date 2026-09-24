@@ -2,7 +2,7 @@ PYTHON ?= python3
 CONFIG ?= configs/p2_base.yaml
 REPLAY_CONFIG ?= configs/p2_queue_replay.yaml
 
-.PHONY: install test lint download-lobster simulate replay research figures clean
+.PHONY: install test lint download-lobster simulate replay research sweep figures clean
 
 install:
 	$(PYTHON) -m pip install -e '.[dev]'
@@ -26,9 +26,12 @@ research:
 	$(PYTHON) -m p2.research --config "$(CONFIG)"
 
 figures:
-	$(PYTHON) scripts/render_readme_figures.py
+	$(PYTHON) scripts/render_published_figures.py
+
+sweep:
+	$(PYTHON) -m p2.cuda_sweep --config "$(CONFIG)"
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .coverage build dist
-	rm -rf p2/__pycache__ src/p2/__pycache__ tests/__pycache__ scripts/__pycache__
+	rm -rf src/p2/__pycache__ tests/__pycache__ scripts/__pycache__
 	rm -rf src/p2_market_maker.egg-info
